@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import { installDaemonAutostart, installPillAutostart } from "../src/install.js";
 import { ensureCandidateElectronRuntime } from "../src/canonical-runtime.js";
 import { updateWorkerPlist } from "../src/canonical-updater.js";
+import { directoryLinkFs } from "./helpers/symlinks.mjs";
 
 const require = createRequire(import.meta.url);
 const {
@@ -246,15 +247,17 @@ test("an update re-points the pill's one stable path instead of naming a new one
     return path.join(macos, "Relay");
   };
   const home = path.join(root, "home");
-  const first = stablePillExecutable(release("0.1.1"), { homeDir: home });
-  const second = stablePillExecutable(release("0.1.2"), { homeDir: home });
+  // A host that cannot create symlinks (Windows without Developer Mode) gets a junction.
+  const fsImpl = directoryLinkFs();
+  const first = stablePillExecutable(release("0.1.1"), { homeDir: home, fsImpl });
+  const second = stablePillExecutable(release("0.1.2"), { homeDir: home, fsImpl });
   assert.equal(first, second, "the launch path survives the update");
   assert.equal(fs.readFileSync(second, "utf8"), "0.1.2", "and now runs the new release");
   // Never replaces a real directory, and falls back to the release path.
   const other = path.join(root, "other-home");
   fs.mkdirSync(path.join(other, ".relay", "runtime", "Relay.app"), { recursive: true });
   const fallback = release("0.1.3");
-  assert.equal(stablePillExecutable(fallback, { homeDir: other }), fallback);
+  assert.equal(stablePillExecutable(fallback, { homeDir: other, fsImpl }), fallback);
   // A path that is not inside an app bundle is left alone.
-  assert.equal(stablePillExecutable("/usr/bin/true", { homeDir: home }), "/usr/bin/true");
+  assert.equal(stablePillExecutable("/usr/bin/true", { homeDir: home, fsImpl }), "/usr/bin/true");
 });

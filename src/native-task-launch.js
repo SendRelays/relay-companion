@@ -300,7 +300,47 @@ export function claudeTurnStartedAfter(rows, messageId) {
   return at >= 0 && rows.slice(at + 1).some((row) => row.type === "assistant" && row.entrypoint !== "relay-execute");
 }
 
-export const CLAUDE_MOVED_NOTICE = "[Relay moved this Task to a background run because Claude did not start it here. Do not start the Task in this conversation. This notice is from Relay, not a model response.]";
+// The live Claude Code processes holding this conversation, from the session
+// registry each one keeps in ~/.claude/sessions/<pid>.json.
+function claudeConversationRecords(session) {
+  if (session?.provider !== "claude" || !session.nativeId) return [];
+  const registry = path.join(claudeHome(), "sessions");
+  return names(registry).filter((n) => n.endsWith(".json")).map((n) => readJson(path.join(registry, n)))
+    .filter((r) => r?.sessionId === session.nativeId && alive(r.pid));
+}
+
+/**
+ * What the Claude Code process holding this conversation says it is doing:
+ * { status: "busy" | "idle" | "waiting", waitingFor }, or null when no live
+ * process holds it. Claude Code records "waiting" with waitingFor
+ * "permission prompt" or "input needed" while a turn is blocked on the
+ * person (runtime 2.1.321, read 2026-11-10).
+ */
+export function claudeConversationState(session) {
+  const record = claudeConversationRecords(session).sort((a, b) => (b.statusUpdatedAt || 0) - (a.statusUpdatedAt || 0))[0];
+  if (!record) return null;
+  return { status: typeof record.status === "string" ? record.status : "", waitingFor: typeof record.waitingFor === "string" ? record.waitingFor : "" };
+}
+
+/** Stop every Claude process holding this conversation. True once none is left. */
+export async function stopClaudeConversation(session, { timeoutMs = 5000, kill = (pid) => process.kill(pid) } = {}) {
+  const pids = claudeConversationRecords(session).map((r) => Number(r.pid));
+  for (const pid of pids) { try { kill(pid); } catch { /* already gone */ } }
+  const deadline = Date.now() + timeoutMs;
+  while (pids.some(alive)) {
+    if (Date.now() > deadline) return false;
+    await sleep(200);
+  }
+  return true;
+}
+
+/** The message that continues a conversation Relay took over from Claude's app. */
+export function claudeTakenOverPrompt(waitingFor) {
+  const what = waitingFor === "input needed" ? "an answer" : "a permission approval";
+  return `[Relay moved this conversation to a background run on this computer because it was waiting for ${what} and nobody is here to give it. The request it was waiting on was not carried out. Continue the Relay Task from where you left off.]`;
+}
+
+export const CLAUDE_MOVED_NOTICE ="[Relay moved this Task to a background run because Claude did not start it here. Do not start the Task in this conversation. This notice is from Relay, not a model response.]";
 
 /**
  * Take a pushed Task back from the Relay-made Claude conversation that never
@@ -312,15 +352,7 @@ export const CLAUDE_MOVED_NOTICE = "[Relay moved this Task to a background run b
  */
 export async function retireUnstartedClaudeConversation(session, { messageId, timeoutMs = 5000, kill = (pid) => process.kill(pid) } = {}) {
   if (session?.provider !== "claude" || !session.nativeId) return {};
-  const registry = path.join(claudeHome(), "sessions");
-  const pids = names(registry).filter((n) => n.endsWith(".json")).map((n) => readJson(path.join(registry, n)))
-    .filter((r) => r?.sessionId === session.nativeId && alive(r.pid)).map((r) => Number(r.pid));
-  for (const pid of pids) { try { kill(pid); } catch { /* already gone */ } }
-  const deadline = Date.now() + timeoutMs;
-  while (pids.some(alive)) {
-    if (Date.now() > deadline) return {};
-    await sleep(200);
-  }
+  if (!await stopClaudeConversation(session, { timeoutMs, kill })) return {};
   const rows = nativeTranscriptRows(session);
   if (claudeTurnStartedAfter(rows, messageId)) return { started: true };
   const last = rows.filter((row) => row.uuid).at(-1);

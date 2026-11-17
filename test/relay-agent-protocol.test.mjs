@@ -11,7 +11,9 @@ import { fileURLToPath } from "node:url";
 import { startAgentLocalServer } from "../src/agent-local-server.js";
 import { localEndpoint } from "../skill/relay/scripts/relay-local.mjs";
 
-const skillText = fs.readFileSync(new URL("../skill/relay/SKILL.md", import.meta.url), "utf8");
+// The installed skill is SKILL.md plus the reference files it points to.
+const skillText = ["SKILL.md", "references/what-relay-is.md", "references/setup.md", "references/update-health.md", "references/transport.md"]
+  .map((file) => fs.readFileSync(new URL(`../skill/relay/${file}`, import.meta.url), "utf8")).join("\n");
 const protocol = fs.readFileSync(new URL("../skill/relay/scripts/relay-protocol.mjs", import.meta.url), "utf8");
 const installer = fs.readFileSync(new URL("../src/install.js", import.meta.url), "utf8");
 const protocolPath = fileURLToPath(new URL("../skill/relay/scripts/relay-protocol.mjs", import.meta.url));
@@ -128,7 +130,7 @@ test("an installed direct helper reports bounded managed-skill identity and inte
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const skillRoot = path.join(root, "custom", "relay");
   fs.cpSync(fileURLToPath(new URL("../skill/relay", import.meta.url)), skillRoot, { recursive: true });
-  const ownedFiles = ["SKILL.md", "agents/openai.yaml", "scripts/relay-protocol.mjs", "scripts/relay-local.mjs", "scripts/relay-attachments.mjs"];
+  const ownedFiles = ["SKILL.md", "references/what-relay-is.md", "references/setup.md", "references/update-health.md", "references/transport.md", "agents/openai.yaml", "scripts/relay-protocol.mjs", "scripts/relay-local.mjs", "scripts/relay-attachments.mjs"];
   fs.writeFileSync(path.join(skillRoot, ".relay-managed.json"), JSON.stringify({
     schemaVersion: 1,
     name: "relay",

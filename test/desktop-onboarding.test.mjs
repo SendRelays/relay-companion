@@ -29,6 +29,8 @@ test("stale events, cancellations and process restart do not replay effects", ()
     assert.deepEqual(createRunStore(dir).read(), cancelled);
     assert.throws(() => reduce(cancelled, { runId: initial.id, revision: 0, type: "AGENT_STARTED", guideVersion: 1, host: "codex" }));
     assert.throws(() => send(cancelled, "AUTH_OPENED"));
-    assert.equal(fs.statSync(path.join(dir, "desktop-onboarding.json")).mode & 0o777, 0o600);
+    // Windows has no POSIX permission bits (every writable file stats as 0o666);
+    // the file is private there through the user profile's ACL instead.
+    if (process.platform !== "win32") assert.equal(fs.statSync(path.join(dir, "desktop-onboarding.json")).mode & 0o777, 0o600);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

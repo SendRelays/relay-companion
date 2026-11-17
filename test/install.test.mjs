@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { canSymlink } from "./helpers/symlinks.mjs";
 
 // No test probes this machine's own Codex binaries unless it names them.
 process.env.RELAY_CODEX_CONFIG_READERS = "";
@@ -31,6 +32,7 @@ import {
   writeClaudeCodeMcpConfig,
   writeClaudeTopicToolPolicy,
   writeCodexMcpConfig,
+  probeCodexConfig,
 } from "../src/install.js";
 
 test("Windows task status distinguishes a missing task from an unavailable scheduler query", () => {
@@ -539,8 +541,15 @@ test("repairDesktopSurfaces --no-restart rewrites both LaunchAgents and Relay.ap
   // The pill launches through the stable Relay.app link (one path across
   // updates, see stablePillExecutable), which points at this release's bundle.
   const stablePill = path.join(fixture.homeDir, ".relay", "runtime", "Relay.app");
-  assert.match(pillPlist, new RegExp(path.join(stablePill, "Contents", "MacOS", path.basename(fixture.electronPath)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.equal(fs.realpathSync(path.join(stablePill, "Contents", "MacOS", path.basename(fixture.electronPath))), fs.realpathSync(fixture.electronPath));
+  if (canSymlink()) {
+    assert.match(pillPlist, new RegExp(path.join(stablePill, "Contents", "MacOS", path.basename(fixture.electronPath)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.equal(fs.realpathSync(path.join(stablePill, "Contents", "MacOS", path.basename(fixture.electronPath))), fs.realpathSync(fixture.electronPath));
+  } else {
+    // A host that cannot create the link (Windows without Developer Mode)
+    // gets stablePillExecutable's documented fallback: the release's own
+    // Electron, so the pill still launches.
+    assert.match(pillPlist, new RegExp(fixture.electronPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
   assert.match(daemonPlist, /<key>KeepAlive<\/key><true\/>/);
   assert.match(pillPlist, /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key><false\/>\s*<\/dict>/);
   assert.doesNotMatch(pillPlist, /<key>KeepAlive<\/key><true\/>/);
@@ -769,23 +778,42 @@ test("writeCodexMcpConfig replaces only the Relay MCP table", () => {
 // Measured 2026-10-09: Conductor 0.61 bundled Codex 0.130.0, which refused
 // the whole config over the two keys Relay writes. These stand-ins print the
 // exact errors that binary printed.
-function fakeCodex(dir, name, script) {
+//
+// Each stand-in is a real executable the probe spawns: its logic is a Node
+// script, launched by a sh script on macOS/Linux and by a .cmd shim on
+// Windows, the shape `npm install -g @openai/codex` gives a Windows Codex.
+function fakeCodex(dir, name, main) {
+  const script = path.join(dir, `${name}.cjs`);
+  fs.writeFileSync(script, `(${main})();\n`);
+  if (process.platform === "win32") {
+    const file = path.join(dir, `${name}.cmd`);
+    fs.writeFileSync(file, `@"${process.execPath}" "${script}" %*\r\n`);
+    return file;
+  }
   const file = path.join(dir, name);
-  fs.writeFileSync(file, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+  fs.writeFileSync(file, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });
   return file;
 }
-const OLD_CODEX = [
-  'cfg="$CODEX_HOME/config.toml"',
-  'if grep -q "^\\[features\\.code_mode\\]" "$cfg"; then echo "Error: failed to load configuration"; echo; echo "Caused by:"; echo "    0: $cfg:9:1: invalid type: map, expected a boolean"; echo "       in \\`features\\`"; exit 1; fi',
-  'if grep -q "^default_tools_approval_mode = \\"writes\\"" "$cfg"; then echo "Error: failed to load configuration"; echo "    1: unknown variant \\`writes\\`, expected one of \\`auto\\`, \\`prompt\\`, \\`approve\\`"; echo "       in \\`mcp_servers.relay.default_tools_approval_mode\\`"; exit 1; fi',
-  'echo "Name  Command"; echo "relay /relay"; exit 0',
-].join("\n");
+const OLD_CODEX = () => {
+  const cfg = require("node:path").join(process.env.CODEX_HOME, "config.toml");
+  const text = require("node:fs").readFileSync(cfg, "utf8");
+  if (/^\[features\.code_mode\]/m.test(text)) {
+    console.log(["Error: failed to load configuration", "", "Caused by:", `    0: ${cfg}:9:1: invalid type: map, expected a boolean`, "       in `features`"].join("\n"));
+    process.exit(1);
+  }
+  if (/^default_tools_approval_mode = "writes"/m.test(text)) {
+    console.log(["Error: failed to load configuration", "    1: unknown variant `writes`, expected one of `auto`, `prompt`, `approve`", "       in `mcp_servers.relay.default_tools_approval_mode`"].join("\n"));
+    process.exit(1);
+  }
+  console.log("Name  Command\nrelay /relay");
+  process.exit(0);
+};
 
 test("an older Codex reading the config gets the shape it can parse", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-compat-"));
   const configPath = path.join(dir, "config.toml");
   fs.writeFileSync(configPath, 'model = "gpt-test"\n');
-  const newer = fakeCodex(dir, "codex-new", 'echo "relay /relay"; exit 0');
+  const newer = fakeCodex(dir, "codex-new", () => { console.log("relay /relay"); process.exit(0); });
   const older = fakeCodex(dir, "codex-old", OLD_CODEX);
 
   const res = writeCodexMcpConfig("/relay/bin/relay.js", "/usr/local/bin/node", configPath, { readers: [newer, older] });
@@ -800,7 +828,7 @@ test("an older Codex reading the config gets the shape it can parse", () => {
   assert.match(text, /\[mcp_servers\.relay\.tools\.relay_topic_post\]\napproval_mode = "approve"/);
   assert.match(text, /model = "gpt-test"/);
   // The older Codex now loads it.
-  assert.equal(spawnSync(older, ["mcp", "list"], { env: { ...process.env, CODEX_HOME: dir } }).status, 0);
+  assert.deepEqual(probeCodexConfig(older, dir), { codex: older, ok: true, error: "" });
 });
 
 test("compat keeps a person's own direct-tool namespaces and drops only Relay's", () => {
@@ -820,7 +848,10 @@ test("a Codex that fails on someone else's key does not change what Relay writes
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-compat-other-"));
   const configPath = path.join(dir, "config.toml");
   fs.writeFileSync(configPath, 'service_tier = "default"\n');
-  const picky = fakeCodex(dir, "codex-picky", 'echo "Error: failed to load configuration"; echo "    1: unknown variant \\`default\\`, expected \\`fast\\` or \\`flex\\`"; echo "       in \\`service_tier\\`"; exit 1');
+  const picky = fakeCodex(dir, "codex-picky", () => {
+    console.log(["Error: failed to load configuration", "    1: unknown variant `default`, expected `fast` or `flex`", "       in `service_tier`"].join("\n"));
+    process.exit(1);
+  });
 
   const res = writeCodexMcpConfig("/relay/bin/relay.js", "/usr/local/bin/node", configPath, { readers: [picky] });
   const text = fs.readFileSync(configPath, "utf8");

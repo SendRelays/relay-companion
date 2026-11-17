@@ -47,7 +47,7 @@ const EXPLICIT_EMAIL_ROUTING = "A human-supplied email is valid: search once, pa
 const UNRESOLVED_RECIPIENT_ROUTING = "For an unresolved recipient, 'create a Relay' or 'a link': mint a link with relay_share_link; a human-supplied email goes in recipient.email; never ask for one.";
 // Every refusal of a draft points back at the one place the writing rules
 // live, so an agent that skipped the skill is sent there before anything goes out.
-const WRITING_GUIDE_POINTER = "Read the installed Relay skill's Writing a Relay section before resending.";
+const WRITING_GUIDE_POINTER = "Read the installed Relay skill's whole Writing a Relay section before resending.";
 
 function exactEmailAddress(value) {
   const email = String(value || "").trim().toLowerCase();
@@ -226,7 +226,7 @@ export async function firstRelayOnboardingCall(client, name, args = {}, { sessio
     return {
       ...work,
       agentInstruction: work.threads.length
-        ? "Find the live open loops at the END of these threads (lastUserMessages and lastAssistantEnding): what someone is waiting on from the person, or what the person is waiting on from someone named in that thread. Pick four from four different threads by the Relay skill's First Relay method. Do not recite this list or open the files it names."
+        ? "Find the live open loops at the END of these threads (lastUserMessages and lastAssistantEnding): what someone is waiting on from the person, or what the person is waiting on from someone named in that thread. Pick four from four different threads by the First Relay method in the Relay skill's references/setup.md. Do not recite this list or open the files it names."
         : "Nothing recent was found. Suggest four first Relays from the project folder you are in, or four useful general ones.",
     };
   }

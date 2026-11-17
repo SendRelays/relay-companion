@@ -194,7 +194,8 @@ function sandbox() {
   const entry = { command: process.execPath, args: [launcher, "mcp"] };
   fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: { relay: entry } }));
   fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
-  fs.writeFileSync(path.join(home, ".codex", "config.toml"), `[mcp_servers.relay]\ncommand = "${entry.command}"\nargs = ["${launcher}", "mcp"]\n`);
+  // Quoted as install.js's tomlQuote does, so Windows backslashes survive.
+  fs.writeFileSync(path.join(home, ".codex", "config.toml"), `[mcp_servers.relay]\ncommand = ${JSON.stringify(entry.command)}\nargs = [${JSON.stringify(launcher)}, "mcp"]\n`);
   return { home, apps, bin };
 }
 
@@ -206,7 +207,7 @@ test("each place is Connected only when its own app says so, else Not connected 
     { uid: process.getuid?.(), pid: 100, ppid: 1, command: `${claudeApp}/Contents/MacOS/Claude`, startedAt: 0 },
     { uid: process.getuid?.(), pid: 101, ppid: 100, command: `${claudeApp}/Contents/Helpers/disclaimer --pgroup`, startedAt: 0 },
     { uid: process.getuid?.(), pid: 102, ppid: 101, command: `${box.home}/Library/Application Support/Claude/claude-code/2.1.293/claude.app/Contents/MacOS/claude`, startedAt: 0 },
-    { uid: process.getuid?.(), pid: 103, ppid: 102, command: `${process.execPath} ${box.home}/.relay/bin/mcp-launcher.cjs mcp`, startedAt: 0 },
+    { uid: process.getuid?.(), pid: 103, ppid: 102, command: `${process.execPath} ${path.join(box.home, ".relay", "bin", "mcp-launcher.cjs")} mcp`, startedAt: 0 },
   ];
   const hostChecks = {
     "claude-code:app": { ok: true },

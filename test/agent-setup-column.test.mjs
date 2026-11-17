@@ -73,7 +73,9 @@ test("each app on this computer has one true state, from its own config and proc
   ]);
 
   // Registered: the ChatGPT app (Codex) has Relay in new chats; nothing to restart.
-  box.write(path.join(box.home, ".codex", "config.toml"), `[mcp_servers.relay]\ncommand = "${box.entry.command}"\nargs = ["--max-old-space-size=32", "${box.launcher}", "mcp"]\n`);
+  // TOML basic strings escape backslashes, as install.js's tomlQuote does: a
+  // Windows path written raw ("C:\Users\...") is not the path Codex reads.
+  box.write(path.join(box.home, ".codex", "config.toml"), `[mcp_servers.relay]\ncommand = ${JSON.stringify(box.entry.command)}\nargs = ["--max-old-space-size=32", ${JSON.stringify(box.launcher)}, "mcp"]\n`);
   box.write(box.desktopConfig, JSON.stringify({ mcpServers: { relay: box.entry } }));
   hosts = state();
   assert.equal(hosts["chatgpt-app"].state, "connected");
@@ -82,7 +84,7 @@ test("each app on this computer has one true state, from its own config and proc
   // running app with no Relay since it opened, or a bridge still under it:
   // none of it says anything about the connector, never a restart or a fix.
   const claudeMain = [100, 1, `${claude}/Contents/MacOS/Claude`, at("2026-10-07T11:00:00Z")];
-  const bridge = [101, 100, `${box.home}/.relay/bin/mcp-bridge --descriptor x`];
+  const bridge = [101, 100, `${path.join(box.home, ".relay", "bin", "mcp-bridge")} --descriptor x`];
   const log = path.join(box.home, "Library", "Logs", "Claude", "mcp.log");
   box.write(log, "2026-10-07T11:00:05.000Z [info] [relay] Server started and connected successfully\n2026-10-07T11:30:00.000Z [error] [relay] Server disconnected.\n");
   for (const rows of [[], [claudeMain], [claudeMain, bridge]]) {
@@ -98,7 +100,7 @@ test("each app on this computer has one true state, from its own config and proc
   assert.equal(state()["claude-code"].state, "broken");
 
   // Codex in the ChatGPT app: a bridge under its app-server is live.
-  hosts = state([[200, 1, `${chatgpt}/Contents/MacOS/ChatGPT`], [201, 200, `${chatgpt}/Contents/Resources/codex app-server`], [202, 201, `${box.home}/.relay/bin/mcp-bridge --descriptor x`]]);
+  hosts = state([[200, 1, `${chatgpt}/Contents/MacOS/ChatGPT`], [201, 200, `${chatgpt}/Contents/Resources/codex app-server`], [202, 201, `${path.join(box.home, ".relay", "bin", "mcp-bridge")} --descriptor x`]]);
   assert.equal(hosts["chatgpt-app"].live, true);
   assert.equal(hosts["claude-app"].live, false);
   // No Claude app here: absent, and its chats are not a place on this computer.

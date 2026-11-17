@@ -18,7 +18,9 @@
 //    build does) so even a stray launch of one shows nothing in the Dock.
 const fs = require("node:fs");
 const os = require("node:os");
-const path = require("node:path");
+// Everything here reads macOS process and LaunchServices paths, so it always
+// works in POSIX paths, whichever platform loads the module.
+const path = require("node:path").posix;
 const { execFile } = require("node:child_process");
 
 const ELECTRON_MACOS_DIR = path.join("electron", "dist", "Electron.app", "Contents", "MacOS");

@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import vm from "node:vm";
 import { resolveSafeAttachmentPreview } from "../src/safe-attachment-preview.js";
+import { canSymlink, SYMLINK_SKIP_REASON } from "./helpers/symlinks.mjs";
 
 const require = createRequire(import.meta.url);
 const { createOutbox } = require("../src/outbox.cjs");
@@ -98,16 +99,23 @@ test("local ids cannot resolve arbitrary paths, missing files, or symlinks outsi
   const { root, entry, cache } = fixture(t);
   const outside = path.join(root, "private.txt");
   fs.writeFileSync(outside, "private");
-  fs.rmSync(entry.files[0].spoolPath);
-  fs.symlinkSync(outside, entry.files[0].spoolPath);
-  assert.equal(cache.resolveLocal(`outbox:${entry.id}`, "file-0", [entry]).ok, false);
+  if (canSymlink()) {
+    fs.rmSync(entry.files[0].spoolPath);
+    fs.symlinkSync(outside, entry.files[0].spoolPath);
+    assert.equal(cache.resolveLocal(`outbox:${entry.id}`, "file-0", [entry]).ok, false);
+  } else {
+    t.diagnostic(`symlink escape not checked: ${SYMLINK_SKIP_REASON}`);
+  }
+  // A spool file that is gone cannot be resolved either.
+  fs.rmSync(entry.files[1].spoolPath);
+  assert.equal(cache.resolveLocal(`outbox:${entry.id}`, "file-1", [entry]).ok, false);
   assert.equal(cache.resolveLocal(`outbox:${entry.id}`, "../../private.txt", [entry]).ok, false);
   assert.equal(cache.resolveLocal("outbox:unknown", "file-0", [entry]).ok, false);
   assert.equal(cache.resolveLocal(`outbox:${entry.id}`, "file-500", [entry]).ok, false);
   assert.equal(cache.resolveLocal("relay_sent", "att_server", [entry]), null);
 });
 
-test("a cached file cannot be redirected outside the attachment store", (t) => {
+test("a cached file cannot be redirected outside the attachment store", { skip: !canSymlink() && SYMLINK_SKIP_REASON }, (t) => {
   const { root, entry, cache } = fixture(t);
   cache.retain(entry);
   const result = cache.resolveLocal(`outbox:${entry.id}`, "file-0");

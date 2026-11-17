@@ -22,6 +22,15 @@ import { readConfig } from "./config.js";
 //   Relay made for it (its Claude process stopped, a notice left), so it
 //   cannot also start there; one that cannot be taken back, or that may
 //   have reached Codex, is never run twice.
+// - Claude's app never starts a conversation it did not open itself in
+//   Bypass permissions: it drops to Accept edits (Claude Desktop 4.23118,
+//   "Downgrading session ... bypassPermissions → acceptEdits"), and its first
+//   MCP call then waits for an approval nobody here can give (Shane's phone
+//   Task, 2026-11-10, waited 20 minutes). With Bypass permissions chosen for
+//   Tasks, a Claude Task the phone sent runs in the background at once.
+// - A Claude Task that did start keeps being watched: when its turn waits on
+//   a permission prompt or a question for REMOTE_STUCK_MS, the app's Claude
+//   process is stopped and the same conversation continues in the background.
 // Execute on this computer never runs a Task in the background (Shane,
 // 2026-10-26): only this phone path does.
 
@@ -30,6 +39,10 @@ export const TASK_RUN_OFF_MESSAGE = "Device execution is off on this computer. T
 // phone sent before it runs in the background instead.
 export const REMOTE_APP_WAIT_MS = 60_000;
 const REMOTE_POLL_MS = 5_000;
+// How long a started Claude Task may wait on an approval or a question before
+// it moves to the background, and how long after its start that is watched.
+export const REMOTE_STUCK_MS = 30_000;
+export const REMOTE_WATCH_MS = 30 * 60_000;
 export const CLAUDE_UNTRUSTED_MESSAGE = "Claude Code has not trusted this folder on that computer yet. Open the folder in Claude Code there once and accept its trust prompt, then try again.";
 // Execution-record phases after which the Task may be in an app conversation.
 const SENT_PHASES = new Set(["submitting", "uncertain", "accepted"]);
@@ -63,8 +76,13 @@ function appLabel(provider) {
   return provider === "codex" ? "Codex" : "Claude Code";
 }
 
-/** Thrown from choose: Claude here holds a pushed Task, so it runs in the background. */
-class RunInBackground extends Error {}
+/** Thrown from choose: Claude's app here cannot run this Task unattended, so it runs in the background. */
+class RunInBackground extends Error {
+  constructor(why) {
+    super(why);
+    this.why = why;
+  }
+}
 
 /**
  * Run the Task named by a claimed session operation. Returns false for any
@@ -96,6 +114,8 @@ export async function runTaskOperation(client, operation, claimToken, {
   open = openDeepLink,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now = Date.now,
+  // Receives the watch on a started Claude Task, which outlives this call.
+  onWatch = () => {},
 } = {}) {
   const taskId = String(operation.input?.taskRelayId || "");
   if (operation.kind !== "start" || !taskId) return false;
@@ -118,16 +138,19 @@ export async function runTaskOperation(client, operation, claimToken, {
   const remoteControlOn = async () => {
     try { return (await launch.claudeLaunchPreflight?.())?.remoteControlDefault === true; } catch { return false; }
   };
-  const background = async (why, { reserve = true } = {}) => {
-    if (!launch.executionEnabled(config)) throw new Error(TASK_RUN_OFF_MESSAGE);
-    // A background run never steps around Claude's own folder trust.
-    if (chosen.provider === "claude" && launch.claudeWorkspaceTrusted && !launch.claudeWorkspaceTrusted(chosen.cwd)) throw new Error(CLAUDE_UNTRUSTED_MESSAGE);
+  const taskPacket = async () => {
     if (!packet) {
       const fetched = await client.fetchRelay(taskId);
       packet = fetched?.packet || fetched?.relay || fetched || {};
     }
+    return packet;
+  };
+  const background = async (why, { reserve = true } = {}) => {
+    if (!launch.executionEnabled(config)) throw new Error(TASK_RUN_OFF_MESSAGE);
+    // A background run never steps around Claude's own folder trust.
+    if (chosen.provider === "claude" && launch.claudeWorkspaceTrusted && !launch.claudeWorkspaceTrusted(chosen.cwd)) throw new Error(CLAUDE_UNTRUSTED_MESSAGE);
     await loaded.startHeadlessTaskRun({
-      client, taskId, operationId: operation.id, provider: chosen.provider, cwd: chosen.cwd, packet,
+      client, taskId, operationId: operation.id, provider: chosen.provider, cwd: chosen.cwd, packet: await taskPacket(),
       prompt: loaded.remoteExecutionPrompt(packet, taskId, { cwd: chosen.cwd }),
       allowed: () => launch.executionEnabled(config), log, reserve,
     });
@@ -174,9 +197,15 @@ export async function runTaskOperation(client, operation, claimToken, {
       }
       chosen = { provider: pick.provider, cwd: pick.cwd };
       launch.setExecutionPreferences(config, workspace.rememberWorkspaceChoice(preferences, { packet, ...chosen }));
-      // With Remote Control on for all sessions, Claude holds a pushed Task
-      // until someone types there. Decided before anything is prepared.
-      if (chosen.provider === "claude" && await remoteControlOn()) throw new RunInBackground();
+      // Decided before anything is prepared. With Remote Control on for all
+      // sessions, Claude holds a pushed Task until someone types there; and
+      // the app will not run it in Bypass permissions.
+      if (chosen.provider === "claude" && await remoteControlOn()) {
+        throw new RunInBackground(`${app()} there holds Tasks until someone types while Remote Control is on for all sessions`);
+      }
+      if (chosen.provider === "claude" && launch.executionMode?.() === "bypassPermissions") {
+        throw new RunInBackground(`${app()} there will not start a Task it did not open itself in Bypass permissions`);
+      }
       return chosen;
     },
   };
@@ -211,13 +240,53 @@ export async function runTaskOperation(client, operation, claimToken, {
     loaded.stopWaitingForNativeApp?.(config, taskId);
     return sentToApp() ? { ok: true } : null;
   };
+  // A started Claude Task whose turn waits on an approval or a question
+  // nobody here can give: stop the app's Claude process and continue the
+  // same conversation in the background, where the Task's permission holds.
+  // The request it waited on never ran, so nothing runs twice. Ends when the
+  // turn finishes, the app lets go of the conversation, or the watch ends.
+  const watchClaudeTurn = async () => {
+    const record = loaded.executionRecord?.(config, taskId);
+    const session = record?.session;
+    if (chosen?.provider !== "claude" || session?.provider !== "claude" || typeof launch.claudeConversationState !== "function") return;
+    if (record.taskRunOwner?.nativeSessionId !== session.nativeId) return;
+    const deadline = now() + REMOTE_WATCH_MS;
+    let waitingSince = null;
+    while (now() < deadline) {
+      await sleep(REMOTE_POLL_MS);
+      const state = launch.claudeConversationState(session);
+      if (!state || state.status === "idle") return;
+      if (state.status !== "waiting") { waitingSince = null; continue; }
+      if (waitingSince === null) waitingSince = now();
+      if (now() - waitingSince < REMOTE_STUCK_MS) continue;
+      if (!launch.executionEnabled(config)) return;
+      if (!await launch.stopClaudeConversation(session)) {
+        log(`remote Task run ${taskId}: Claude Code is waiting on a ${state.waitingFor || "prompt"} and would not stop; leaving it there`);
+        return;
+      }
+      await loaded.startHeadlessTaskRun({
+        client, taskId, operationId: operation.id, provider: "claude", cwd: chosen.cwd, packet: await taskPacket(),
+        sessionId: session.nativeId, prompt: launch.claudeTakenOverPrompt(state.waitingFor),
+        allowed: () => launch.executionEnabled(config), log, reserve: false,
+      });
+      loaded.markMovedToBackground?.(config, taskId);
+      log(`remote Task run ${taskId}: Claude Code waited on a ${state.waitingFor || "prompt"}; the conversation continues in the background`);
+      return;
+    }
+  };
+  const startedInApp = async () => {
+    await finish(`Started in ${app()}${inFolder()}.`);
+    if (chosen?.provider !== "claude") return;
+    const watch = watchClaudeTurn().catch((error) => log(`remote Task run ${taskId}: watching Claude Code failed: ${error?.message || error}`));
+    onWatch(watch);
+  };
   try {
     let result;
     try {
       result = await executeNativeTask(args);
     } catch (error) {
       if (error instanceof RunInBackground) {
-        await background(`${app()} there holds Tasks until someone types while Remote Control is on for all sessions`);
+        await background(error.why);
         return true;
       }
       // Run it in the background only when the app was chosen and nothing
@@ -227,7 +296,7 @@ export async function runTaskOperation(client, operation, claimToken, {
       if (sentToApp()) {
         const taken = await takeBackFromClaude();
         if (taken === "background") return true;
-        if (taken === "started") { await finish(`Started in ${app()}${inFolder()}.`); return true; }
+        if (taken === "started") { await startedInApp(); return true; }
         throw error;
       }
       log(`remote Task run ${taskId}: ${app()} did not start it (${error?.message || error}); running it in the background`);
@@ -261,7 +330,7 @@ export async function runTaskOperation(client, operation, claimToken, {
         }
       }
     }
-    await finish(`Started in ${app()}${inFolder()}.`);
+    await startedInApp();
   } catch (error) {
     if (error instanceof FolderNeeded) {
       if (!error.options.length) {

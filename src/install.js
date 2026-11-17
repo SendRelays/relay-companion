@@ -2144,9 +2144,15 @@ export function codexConfigReaders({ env = process.env, homedir = os.homedir() }
 }
 
 /** Ask one Codex to load the config the way it will at launch; `mcp list` only parses it. */
-export function probeCodexConfig(codex, configDir, { runCommand = spawnSync, env = process.env } = {}) {
-  const res = runCommand(codex, ["mcp", "list"], {
+export function probeCodexConfig(codex, configDir, { runCommand = spawnSync, env = process.env, platform = process.platform } = {}) {
+  // On Windows, `npm install -g @openai/codex` puts a codex.cmd shim on PATH.
+  // A .cmd is a batch script, not an executable image: spawning it directly
+  // fails with EINVAL, and this probe would silently skip the Codex it is
+  // meant to ask. Run it through cmd.exe; the arguments are fixed literals.
+  const shim = platform === "win32" && /\.(cmd|bat)$/i.test(String(codex));
+  const res = runCommand(shim ? `"${codex}"` : codex, ["mcp", "list"], {
     encoding: "utf8", timeout: 8000, windowsHide: true, env: { ...env, CODEX_HOME: configDir },
+    ...(shim ? { shell: true } : {}),
   });
   if (res.error) return { codex, ok: true, skipped: res.error.code || "spawn_failed" };
   const out = `${res.stdout || ""}${res.stderr || ""}`;

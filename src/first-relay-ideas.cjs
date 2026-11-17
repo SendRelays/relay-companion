@@ -217,7 +217,7 @@ function createFirstRelayIdeas({ directory = defaultDirectory(), now = Date.now 
             : pickedInstruction(state, picked)
           : state.ideas.length === IDEA_COUNT
             ? "Your ideas are in the Relay app. Call relay_onboarding_wait_pick until the person picks one."
-            : `Follow the Relay skill's First Relay tutorial: read recent work with relay_onboarding_recent_work, then write four ideas with relay_onboarding_ideas${who ? `, all about what to send ${who}` : ""}. The account is already connected: run no setup commands and do not mention signing in.`,
+            : `Follow the First Relay tutorial in the Relay skill's references/setup.md: read recent work with relay_onboarding_recent_work, then write four ideas with relay_onboarding_ideas${who ? `, all about what to send ${who}` : ""}. The account is already connected: run no setup commands and do not mention signing in.`,
       };
     },
     /** The AI's four ideas, shown in the pill. Replaces earlier ones until a pick. */

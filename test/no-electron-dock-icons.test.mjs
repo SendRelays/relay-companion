@@ -36,10 +36,11 @@ test("an agent is never handed the Electron binary to run the protocol helper", 
 // printed its help and then never quit. Before LSUIElement each one was an atom.
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const asNode = require("../bootstrap/electron-as-node.cjs");
 const stray = require("../src/stray-electron.cjs");
-const packageRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("every runnable Relay script requires the Electron-as-Node guard first", () => {
   for (const relative of asNode.ENTRY_SCRIPTS) {

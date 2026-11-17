@@ -11,7 +11,8 @@ import relaySettings from "./relay-settings.cjs";
 // A Task the person started from their phone, run in the background on this
 // computer when the desktop app cannot start it with nobody here (Claude with
 // Remote Control on for all sessions, or an app that did not start it in
-// time). Only the phone's "Run on computer" reaches this; Execute on this
+// time, or one that stopped on a question nobody here can answer). Only the
+// phone's "Run on computer" reaches this; Execute on this
 // computer always uses the app.
 
 // The permission the person chose for Tasks in Your AIs, as ACP modes.
@@ -39,10 +40,12 @@ export function taskRunAcpMode(provider) {
  * the runner; a finished Codex run is announced to Codex's app.
  */
 export async function startHeadlessTaskRun({ client, taskId, operationId, provider, cwd, packet, prompt, allowed, log = () => {},
-  reserve = true, start = startAcpRun, notifyCodex = notifyCodexDesktopThreads }) {
+  reserve = true, sessionId, start = startAcpRun, notifyCodex = notifyCodexDesktopThreads }) {
   const title = String(packet?.title || "Relay Task").slice(0, 200);
   const worker = await start({
-    provider, cwd, title, prompt,
+    // With a sessionId the run continues that conversation (taken over from
+    // the app) instead of starting a new one.
+    provider, cwd, title, prompt, ...(sessionId ? { sessionId } : {}),
     logPath: path.join(configDir(), "acp-operations", `${createHash("sha256").update(String(operationId)).digest("hex")}.jsonl`),
     mode: taskRunAcpMode(provider),
     mcpServers: acpMcpServers({ relay: relayMcpLaunchSpec() }),

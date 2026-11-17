@@ -287,14 +287,14 @@ test("native workers use independent supervisors and a deadline outside daemon s
   for (const platform of ["darwin", "linux", "win32"]) {
     const calls = [];
     const written = {};
-    assert.deepEqual(await submitApplicationWorker({ ...f, platform, env: { NODE_OPTIONS: "unsafe" }, writeFile: (file, text) => { written[file] = text; },
+    assert.deepEqual(await submitApplicationWorker({ ...f, platform, userId: 501, env: { NODE_OPTIONS: "unsafe" }, writeFile: (file, text) => { written[file] = text; },
       run: (file, args, options) => { assert.equal(options.env.NODE_OPTIONS, undefined); if (args[0] === "-p") return { status: 0, stdout: "22.14.0" }; calls.push([file, ...args]); return { status: args[0] === "list" ? 1 : 0 }; },
       launchHidden: (parts, options) => { assert.equal(options.env.NODE_OPTIONS, undefined); calls.push(parts); return { ok: true }; } }), { ok: true });
     if (platform === "linux") assert.equal(calls[0][0], "systemd-run");
     if (platform === "darwin") {
       // A run-once plist, never `launchctl submit`: submitted jobs are KeepAlive.
       assert.equal(calls.some(call => call.includes("submit")), false);
-      assert.deepEqual(calls.at(-1).slice(1, 3), ["bootstrap", `gui/${process.getuid()}`]);
+      assert.deepEqual(calls.at(-1).slice(1, 3), ["bootstrap", "gui/501"]);
       const plist = written[calls.at(-1)[3]];
       assert.match(plist, /<key>KeepAlive<\/key><false\/>/);
       assert.match(plist, /work\.relay\.application\.update/);
@@ -365,7 +365,8 @@ test("a stale KeepAlive worker job naming a pruned release is removed once, and 
   let removals = 0;
   const once = await reconcileApplicationWorker({ platform: "darwin", env: {}, wait: async () => {},
     run: (file, args) => args[0] === "remove" ? (removals++, { status: 0 }) : removals ? { status: 113 } : idle });
-  assert.deepEqual([once.removed, once.reason, once.missing], [true, "worker-missing", path.join(pruned, "bootstrap", "update-watchdog.cjs")]);
+  // `missing` is the path exactly as launchctl listed it (built with "/" above).
+  assert.deepEqual([once.removed, once.reason, once.missing], [true, "worker-missing", `${pruned}/bootstrap/update-watchdog.cjs`]);
   assert.deepEqual(await reconcileApplicationWorker({ platform: "darwin", env: {}, run: (file, args) => args[0] === "remove" ? assert.fail("running") : live }), { removed: false });
 });
 

@@ -105,7 +105,10 @@ test("fleet telemetry surfaces a pinned recovery candidate and all durable failu
 test("fleet telemetry names a superseded recovery's real target and a parked episode", () => {
   const homeDir = temp();
   const updateStatePath = path.join(homeDir, "update-state.json");
-  const layout = canonicalRuntimeLayout({ homeDir, platform: "darwin" });
+  // The temp home is a native path, so lay it out for the native platform: a
+  // POSIX layout of a Windows home resolves under the current directory.
+  const platform = process.platform;
+  const layout = canonicalRuntimeLayout({ homeDir, platform });
   fs.mkdirSync(path.dirname(layout.pointerPath), { recursive: true });
   fs.writeFileSync(layout.pointerPath, JSON.stringify({
     schema: 1, state: "recovery-required", active: false, preparedAt: 1_788_800_000_000,
@@ -115,7 +118,7 @@ test("fleet telemetry names a superseded recovery's real target and a parked epi
   fs.writeFileSync(updateStatePath, JSON.stringify({
     recoveryFailure: { target: "canonical-recovery:0.1.510", count: 24, firstAt: 3000, lastAt: exhaustedAt, launched: "0.1.624", exhaustedAt },
   }));
-  const telemetry = collectCompanionFleetTelemetry({ homeDir, platform: "darwin", channel: "stable", env: {}, updateStatePath, collectHealth: () => undefined });
+  const telemetry = collectCompanionFleetTelemetry({ homeDir, platform, channel: "stable", env: {}, updateStatePath, collectHealth: () => undefined });
   assert.deepEqual(telemetry.failures, [{
     kind: "recovery",
     target: "canonical-recovery:0.1.510 via 0.1.624",
@@ -130,7 +133,7 @@ test("fleet telemetry names a superseded recovery's real target and a parked epi
   fs.writeFileSync(updateStatePath, JSON.stringify({
     recoveryFailure: { target: "canonical-recovery:0.1.510", count: 2, firstAt: 3000, lastAt: 4000, launched: "0.1.510" },
   }));
-  const plain = collectCompanionFleetTelemetry({ homeDir, platform: "darwin", channel: "stable", env: {}, updateStatePath, collectHealth: () => undefined });
+  const plain = collectCompanionFleetTelemetry({ homeDir, platform, channel: "stable", env: {}, updateStatePath, collectHealth: () => undefined });
   assert.deepEqual(Object.keys(plain.failures[0]).sort(), ["count", "firstAt", "kind", "lastAt", "target"]);
   assert.equal(plain.failures[0].target, "canonical-recovery:0.1.510");
 });

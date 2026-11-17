@@ -5,7 +5,7 @@ import { runSessionDirectoryOnce } from "../src/session-controller.js";
 
 function harness({ enabled = true, providers = [{ provider: "claude", label: "Claude Code" }, { provider: "codex", label: "Codex", binary: "codex" }], result = { ok: true }, choices,
   remoteControl = false, trusted = true, phase = "prepared", observe = async () => ({ ok: true, waiting: true }), turnStarted = false,
-  retire = { retired: true }, owner = "native_gui" } = {}) {
+  retire = { retired: true }, owner = "native_gui", mode = "auto", states = null, stops = true } = {}) {
   const evidence = [];
   const remembered = [];
   const calls = { choose: null, consent: 0, background: [], observed: 0, stoppedWaiting: 0 };
@@ -32,6 +32,11 @@ function harness({ enabled = true, providers = [{ provider: "claude", label: "Cl
       claudeWorkspaceTrusted: () => trusted,
       nativeTurnStarted: async () => turnStarted,
       retireUnstartedClaudeConversation: async (session, options) => { calls.retired = { session, options }; return retire; },
+      executionMode: () => mode,
+      // One registry reading per poll; past the end, the app let go of it.
+      ...(states ? { claudeConversationState: () => { calls.polls = (calls.polls || 0) + 1; return states[calls.polls - 1] ?? null; } } : {}),
+      stopClaudeConversation: async (session) => { calls.stopped = session; return stops; },
+      claudeTakenOverPrompt: (waitingFor) => `continue after ${waitingFor}`,
     },
     workspace: {
       workspaceChoices: choices || (({ providers: offered }) => ({
@@ -266,6 +271,60 @@ test("a Task Claude holds without starting is taken back from that conversation 
   assert.equal(stuck.calls.background.length, 0);
   assert.equal(stuck.evidence[0].result.output.waiting, true);
   assert.match(stuck.evidence[0].result.output.message, /Relay could not take it back/);
+});
+
+test("with Bypass permissions chosen, a Claude Task runs in the background at once, since the app would drop it to Accept edits", async () => {
+  const h = harness({ mode: "bypassPermissions" });
+  await run(h);
+  assert.equal(h.calls.choose, null, "the app was never opened");
+  assert.equal(h.calls.background.length, 1);
+  assert.equal(h.calls.background[0].reserve, true);
+  assert.match(h.evidence[0].result.output.message, /^Claude Code there will not start a Task it did not open itself in Bypass permissions, so it is running in the background in relay\./);
+
+  const codex = harness({ mode: "bypassPermissions" });
+  await run(codex, { provider: "codex", taskAppChosen: true });
+  assert.equal(codex.calls.background.length, 0, "Claude's mode decides nothing for Codex");
+});
+
+const waiting = { status: "waiting", waitingFor: "permission prompt" };
+const busy = { status: "busy", waitingFor: "" };
+async function watched(options, input) {
+  const h = harness(options);
+  let watch;
+  await run(h, input, { ...clock(), onWatch: (promise) => { watch = promise; } });
+  await watch;
+  return h;
+}
+
+test("a started Claude Task that waits on an approval moves, conversation and all, to the background", async () => {
+  // Five-second polls: busy, then waiting long enough to pass REMOTE_STUCK_MS.
+  const h = await watched({ states: [busy, ...Array(8).fill(waiting)] });
+  assert.equal(h.evidence[0].result.output.message, "Started in Claude Code in relay.");
+  assert.deepEqual(h.calls.stopped, { provider: "claude", nativeId: "native_gui" }, "the app's Claude process is stopped first");
+  assert.equal(h.calls.background.length, 1);
+  const moved = h.calls.background[0];
+  assert.deepEqual([moved.provider, moved.cwd, moved.sessionId, moved.reserve], ["claude", "C:/work/relay", "native_gui", false],
+    "the same conversation continues, already reserved for this Task");
+  assert.equal(moved.prompt, "continue after permission prompt");
+  assert.equal(h.calls.moved, 1);
+});
+
+test("a Claude Task is left in the app while it works, finishes, or waits only briefly", async () => {
+  const finished = await watched({ states: [busy, waiting, waiting, busy, { status: "idle" }, waiting, waiting, waiting, waiting, waiting, waiting, waiting] });
+  assert.equal(finished.calls.background.length, 0, "a short wait the person answered, then the turn ended");
+  assert.equal(finished.calls.polls, 5, "the watch ends with the turn");
+
+  const closed = await watched({ states: [busy] });
+  assert.equal(closed.calls.background.length, 0, "Claude let go of the conversation");
+
+  const stubborn = await watched({ states: Array(10).fill(waiting), stops: false });
+  assert.equal(stubborn.calls.background.length, 0, "a process that would not stop keeps the Task");
+
+  const codex = await watched({ states: Array(10).fill(waiting) }, { provider: "codex", taskAppChosen: true });
+  assert.equal(codex.calls.polls, undefined, "only Claude is watched");
+
+  const foreign = await watched({ states: Array(10).fill(waiting), owner: "someone_else" });
+  assert.equal(foreign.calls.background.length, 0, "a Task reserved for another conversation is never taken over");
 });
 
 test("Execute on this computer never runs a Task in the background", async () => {

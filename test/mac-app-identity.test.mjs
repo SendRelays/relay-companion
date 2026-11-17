@@ -7,11 +7,15 @@ import test from "node:test";
 import { brandMacElectronApp, localizeMacDisplayName, renameMacElectronExecutable, runMacTrayPositionProbe } from "../scripts/build-runtime-artifact.mjs";
 import { verifyMacElectronIdentity } from "../scripts/verify-installed-runtime.mjs";
 import { createRequire } from "node:module";
+import { canSymlink, SYMLINK_SKIP_REASON } from "./helpers/symlinks.mjs";
 
 const require = createRequire(import.meta.url);
 const { RELAY_MAC_BUNDLE_IDENTIFIER } = require("../src/mac-app-identity.cjs");
+// The bundle keeps MacOS/Electron as a relative file link to MacOS/Relay; a
+// test that creates or verifies that link needs a host that can make symlinks.
+const needsSymlinks = { skip: !canSymlink() && SYMLINK_SKIP_REASON };
 
-test("the runtime builder brands and verifies the outer Electron application", () => {
+test("the runtime builder brands and verifies the outer Electron application", needsSymlinks, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-electron-brand-test-"));
   try {
     const appPath = path.join(root, "Electron.app");
@@ -71,19 +75,25 @@ test("the runtime builder brands and verifies the outer Electron application", (
   }
 });
 
-test("renaming the Electron executable is idempotent and refuses ambiguous bundles", () => {
+test("renaming the Electron executable is idempotent and refuses ambiguous bundles", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-electron-rename-test-"));
   try {
     const appPath = path.join(root, "Electron.app");
     const macos = path.join(appPath, "Contents", "MacOS");
     fs.mkdirSync(macos, { recursive: true });
     fs.writeFileSync(path.join(macos, "Electron"), "bytes", { mode: 0o755 });
-    renameMacElectronExecutable(appPath);
-    renameMacElectronExecutable(appPath);
-    assert.deepEqual(fs.readdirSync(macos).sort(), ["Electron", "Relay"]);
-    assert.equal(fs.readlinkSync(path.join(macos, "Electron")), "Relay");
+    if (canSymlink()) {
+      renameMacElectronExecutable(appPath);
+      renameMacElectronExecutable(appPath);
+      assert.deepEqual(fs.readdirSync(macos).sort(), ["Electron", "Relay"]);
+      assert.equal(fs.readlinkSync(path.join(macos, "Electron")), "Relay");
+      fs.rmSync(path.join(macos, "Electron"));
+    } else {
+      // Only the idempotent rename makes a link; the refusals below still run.
+      t.diagnostic(`idempotent rename not checked: ${SYMLINK_SKIP_REASON}`);
+      fs.renameSync(path.join(macos, "Electron"), path.join(macos, "Relay"));
+    }
 
-    fs.rmSync(path.join(macos, "Electron"));
     fs.writeFileSync(path.join(macos, "Electron"), "second copy", { mode: 0o755 });
     assert.throws(() => renameMacElectronExecutable(appPath), /two main executables/);
 
@@ -149,7 +159,7 @@ test("installed macOS runtime rejects a generic Electron identity", () => {
   );
 });
 
-test("installed macOS runtime verifies the branded identity and strict signature", () => {
+test("installed macOS runtime verifies the branded identity and strict signature", needsSymlinks, () => {
   const calls = [];
   const { root, electronPath } = identityFixture();
   try {

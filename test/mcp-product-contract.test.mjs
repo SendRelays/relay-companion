@@ -10,8 +10,10 @@ const codexByName = new Map(toolsForAccount(
   "codex",
 ).map((tool) => [tool.name, tool]));
 const source = await readFile(new URL("../src/mcp.js", import.meta.url), "utf8");
-const skillGuide = await readFile(new URL("../skill/relay/SKILL.md", import.meta.url), "utf8");
-const devSkillGuide = await readFile(new URL("../skill/variants/SKILL.dev.md", import.meta.url), "utf8");
+// The installed skill is SKILL.md plus the reference files it points to.
+const skillReferences = (await Promise.all(["what-relay-is", "setup", "update-health", "transport"].map((name) => readFile(new URL(`../skill/relay/references/${name}.md`, import.meta.url), "utf8")))).join("\n");
+const skillGuide = (await readFile(new URL("../skill/relay/SKILL.md", import.meta.url), "utf8")) + "\n" + skillReferences;
+const devSkillGuide = (await readFile(new URL("../skill/variants/SKILL.dev.md", import.meta.url), "utf8")) + "\n" + skillReferences;
 const SEND_GATE = "Only send a Relay to a person or channel when the user asks.";
 
 const EXPECTED_TOOLS = [
@@ -111,7 +113,11 @@ test("startup guidance and owner schemas preserve the complete product ontology"
   }
   assert.match(byName.get("relay_send").inputSchema.properties.title.description, /3-6 word gist/i);
   assert.match(byName.get("relay_chat_fetch").description, /no user-visible threads or topics/i);
-  assert.match(RELAY_MCP_INSTRUCTIONS, /relay_send requires a complete, non-empty forAgent/i);
+  assert.match(RELAY_MCP_INSTRUCTIONS, /a complete, non-empty forAgent document for their agent/i);
+  // A Codex agent read 28 lines of the writing rules and sent a poor
+  // introduction (2026-11-13): the startup block says the whole section is
+  // mandatory reading, not an excerpt.
+  assert.match(RELAY_MCP_INSTRUCTIONS, /you must read the installed Relay skill's whole Writing a Relay section/);
   // The one thing an agent creates unasked, said next to the send gate in
   // every profile so the two never read as a contradiction, and the guard on
   // the tool that delivers: a milestone Relay is a link, never a send.

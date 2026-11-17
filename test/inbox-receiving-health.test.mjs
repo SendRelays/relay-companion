@@ -4,6 +4,7 @@
 // until the worker caught up. Evidence, judgement and self-repair are pinned here.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import { createRequire } from "node:module";
 import { createInboxHealth, inboxHealthPath } from "../src/inbox-health.js";
@@ -15,7 +16,7 @@ const require = createRequire(import.meta.url);
 const liveness = require("../src/pill-liveness.cjs");
 
 test("the worker's evidence file lives beside the daemon heartbeat", () => {
-  assert.equal(inboxHealthPath("/h"), "/h/.relay/recovery/inbox.json");
+  assert.equal(inboxHealthPath("/h"), path.join("/h", ".relay", "recovery", "inbox.json"));
   assert.equal(liveness.inboxHealthPath("/h"), inboxHealthPath("/h"));
 });
 

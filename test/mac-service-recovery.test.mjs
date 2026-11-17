@@ -15,6 +15,8 @@ import { repairServiceRegistrations } from "../bootstrap/service-recovery.cjs";
 import { activateCanonicalRuntime } from "../src/canonical-updater.js";
 import { pruneCanonicalReleases } from "../src/canonical-runtime.js";
 import { inspectStablePillLink, stablePillExecutable } from "../bootstrap/mac-background-identity.cjs";
+// A host that cannot create symlinks (Windows without Developer Mode) gets a junction for the stable link.
+import { directoryLinkFs } from "./helpers/symlinks.mjs";
 
 function fixture(t) {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-mac-recovery-"));
@@ -310,7 +312,7 @@ function linkedFixture(t) {
   };
   const link = path.join(f.homeDir, ".relay", "runtime", "Relay.app");
   const register = (target) => {
-    const executable = stablePillExecutable(target.electron, { homeDir: f.homeDir });
+    const executable = stablePillExecutable(target.electron, { homeDir: f.homeDir, fsImpl: directoryLinkFs() });
     assert.equal(executable, path.join(link, "Contents", "MacOS", "Relay"));
     for (const [index, label] of LABELS.entries()) {
       const file = path.join(f.homeDir, "Library", "LaunchAgents", `${label}.plist`);

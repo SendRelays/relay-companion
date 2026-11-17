@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { CLAUDE_MOVED_NOTICE, claudeTurnStartedAfter, nativeProgress, nativeTranscriptRows, retireUnstartedClaudeConversation } from "../src/native-task-launch.js";
+import { CLAUDE_MOVED_NOTICE, claudeConversationState, claudeTakenOverPrompt, claudeTurnStartedAfter, nativeProgress, nativeTranscriptRows, retireUnstartedClaudeConversation, stopClaudeConversation } from "../src/native-task-launch.js";
 import { BACKGROUND_STATUS, executeNativeTask, executionRecordPath, markMovedToBackground, nativeExecutionStatus } from "../src/native-task-execute.js";
 
 function claudeFixture(t, rows) {
@@ -60,6 +60,22 @@ test("a process that will not stop leaves the Task where it is", async (t) => {
   const { session } = claudeFixture(t, [seed, task]);
   assert.deepEqual(await retireUnstartedClaudeConversation(session, { messageId: "msg_1", timeoutMs: 300, kill: () => {} }), {});
   assert.equal(nativeTranscriptRows(session).length, 2, "nothing was written");
+});
+
+test("Claude's own session record says when a conversation waits on the person", async (t) => {
+  const { session, child } = claudeFixture(t, [seed, task]);
+  const record = path.join(process.env.CLAUDE_HOME, "sessions", `${child.pid}.json`);
+  const write = (patch) => fs.writeFileSync(record, JSON.stringify({ pid: child.pid, sessionId: session.nativeId, entrypoint: "claude-desktop", kind: "interactive", ...patch }));
+  write({ status: "busy" });
+  assert.deepEqual(claudeConversationState(session), { status: "busy", waitingFor: "" });
+  write({ status: "waiting", waitingFor: "permission prompt", statusUpdatedAt: Date.now() });
+  assert.deepEqual(claudeConversationState(session), { status: "waiting", waitingFor: "permission prompt" });
+  assert.equal(claudeConversationState({ ...session, nativeId: randomUUID() }), null, "another conversation has no live process");
+  assert.match(claudeTakenOverPrompt("permission prompt"), /waiting for a permission approval/);
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  assert.equal(await stopClaudeConversation(session), true);
+  await exited;
+  assert.equal(claudeConversationState(session), null, "once stopped, nothing holds it");
 });
 
 test("Execute on this computer only reports a Task moved to the background, and never sends it anywhere", async (t) => {

@@ -1,19 +1,35 @@
 {
   "schemaVersion": 1,
   "name": "relay",
-  "version": "1.1.87",
+  "version": "1.1.88",
   "consentVersion": 2,
   "baseUrl": "https://sendrelays.com/skills/relay/v1.1.79",
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "7989a25f6ce3a31a097ba8ef5f4ac18d03e746d1ee3e9c5940df99d19fb54fe6",
+      "sha256": "1ff9f3d2648a119850f5599e8197c27de59ca9b4548f99c2a761fe375dce9f4f",
       "variants": {
         "dev": {
           "source": "SKILL.dev.md",
-          "sha256": "2cf85a8050ac5ce4059473e1c139a8162b546231037c342c8039666d859152ac"
+          "sha256": "787b0eb1ab1861ca9b0ff4c7402527512bdf199b91e692656a074fb0b49302c8"
         }
       }
+    },
+    {
+      "path": "references/what-relay-is.md",
+      "sha256": "6ca52d1bcd9d962b28eea68b7042b5541bb691c064282d93ee93e29cb42d3e5d"
+    },
+    {
+      "path": "references/setup.md",
+      "sha256": "252a158caefcaed21a1596adebfacc1564f6f7bab29bb8005e7f57203f0116d4"
+    },
+    {
+      "path": "references/update-health.md",
+      "sha256": "09e2af35999deee7d56a9fdbdac63930b2449a2ddfbc1d5374e70c144c4e2ff8"
+    },
+    {
+      "path": "references/transport.md",
+      "sha256": "aeead3c03554dd308f144c63ca5a8fea0f2159ffa761378ce33b99dbad40fabb"
     },
     {
       "path": "agents/openai.yaml",

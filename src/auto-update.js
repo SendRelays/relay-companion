@@ -54,6 +54,12 @@ const MAX_CHECK_FAILURE_RETRY_MS = 5 * 60 * 1000;
 // Base retry delay after an observed failed transaction. Old launchers without
 // request records also use this as their fallback observation window.
 const RETRY_COOLDOWN_MS = 2 * 60 * 1000;
+// Another updater (a manual `relay update`, or a worker from before a daemon
+// restart) holds the install lock. Its transaction takes minutes, so asking
+// again on every 5-second daemon loop only starts a worker that fails at the
+// lock (Dino's PC, 2026-11-20: one every ~10 s for two minutes). Wait this
+// long before asking again; a committed install restarts this daemon anyway.
+export const WORKER_BUSY_RETRY_MS = 60 * 1000;
 // Candidate npm/Electron staging is allowed to run for 15 minutes. An old daemon
 // remains alive throughout immutable staging, so its ordinary two-minute failed-
 // update heuristic must not launch duplicate workers while the first is healthy.
@@ -631,6 +637,7 @@ export function createAutoUpdater({
   checkFailureRetryMs = DEFAULT_CHECK_FAILURE_RETRY_MS,
   maxCheckFailureRetryMs = MAX_CHECK_FAILURE_RETRY_MS,
   retryCooldownMs = RETRY_COOLDOWN_MS,
+  workerBusyRetryMs = WORKER_BUSY_RETRY_MS,
   platform = process.platform,
   // Idle probe: while any host turn is in flight, defer the restart-bearing update
   // (kickstart -k would kill the running turn). Injected from the daemon; defaults to
@@ -715,7 +722,20 @@ export function createAutoUpdater({
       : 0,
     escalatedFor: null,
     workersReconciled: false,
+    // Set when a launch was refused because another updater holds the lock.
+    workerBusyUntil: 0,
   };
+
+  // A launch refused because another updater is installing: leave that
+  // updater alone for WORKER_BUSY_RETRY_MS before starting another worker.
+  function workerBusyWait(t, current, extra = {}) {
+    if (!(state.workerBusyUntil > t)) return null;
+    return { status: "deferred-worker-busy", current, retryAt: state.workerBusyUntil, ...extra };
+  }
+  function noteWorkerBusy(t) {
+    log(`auto-update is already running in another worker; asking again in ${Math.round(Math.max(0, workerBusyRetryMs) / 1000)}s`);
+    state.workerBusyUntil = t + Math.max(0, workerBusyRetryMs);
+  }
 
   function admittedLaunch(result) {
     if (!result) return false;
@@ -845,6 +865,8 @@ export function createAutoUpdater({
     // long as necessary, but because pending updates are checked on EVERY daemon
     // loop it launches within seconds of the final turn becoming idle.
     if (busy()) return { status: "deferred-busy", current: runningVersion, latest };
+    const workerBusy = workerBusyWait(t, runningVersion, { latest });
+    if (workerBusy) return workerBusy;
     // Restart politeness: one update restart per cooldown window. The pending
     // version keeps tracking @latest, so waiting never strands users on an
     // intermediate build — it only spaces out the restarts.
@@ -880,7 +902,7 @@ export function createAutoUpdater({
     if (!admittedLaunch(launch)) {
       state.updating = false;
       const status = rejectedLaunchStatus(launch);
-      if (status === "worker-busy") log("auto-update is already running in another worker");
+      if (status === "worker-busy") noteWorkerBusy(t);
       else log(`auto-update worker was not admitted (${status})`);
       return { status, current: runningVersion, latest, channel };
     }
@@ -996,6 +1018,8 @@ export function createAutoUpdater({
       if ((newerGlobal || equalExplicitRepair) && managedInstallInfo(packageRoot, { platform })) {
         const releaseWait = releaseDeferral(runningVersion); if (releaseWait) return releaseWait;
         if (busy()) return { status: "deferred-rescue-busy", current: runningVersion, onDisk: canonical.version };
+        const workerBusy = workerBusyWait(t, runningVersion, { onDisk: canonical.version });
+        if (workerBusy) return workerBusy;
         let launch = null;
         try {
           launch = spawnUpdate({
@@ -1012,7 +1036,9 @@ export function createAutoUpdater({
           return { status: "rescue-launch-failed", current: runningVersion, onDisk: canonical.version };
         }
         if (!admittedLaunch(launch)) {
-          return { status: rejectedLaunchStatus(launch, "rescue-launch-failed"), current: runningVersion, onDisk: canonical.version };
+          const status = rejectedLaunchStatus(launch, "rescue-launch-failed");
+          if (status === "worker-busy") noteWorkerBusy(t);
+          return { status, current: runningVersion, onDisk: canonical.version };
         }
         state.updating = true;
         state.updateStartedAt = t;

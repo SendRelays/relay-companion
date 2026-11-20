@@ -1220,3 +1220,32 @@ test("an update check the computer slept through is not a failure and is retried
   failed.wake();
   assert.equal(failed.state.nextCheckAt, 0);
 });
+
+test("a launch refused because another updater holds the lock waits a minute before the next worker (Dino, 2026-11-20)", async t => {
+  // A manual `relay update` held the install lock while the daemon, on its
+  // 5-second loop, started a fresh worker every ~10 s that failed at the lock.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-worker-busy-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packageRoot = "C:\Users\test\.relay\runtime\releases\current\node_modules\relay-companion";
+  let clock = 100000;
+  const launches = [];
+  let answer = "busy";
+  const updater = createAutoUpdater({
+    env: {}, platform: "win32", packageRoot, now: () => clock,
+    getCurrentVersion: () => "1.0.0", getOnDiskVersion: () => "1.0.0", getCurrentChannel: () => "stable",
+    getCanonicalRuntime: () => ({ packageRoot, version: "1.0.0" }), getCanonicalRuntimeState: () => null,
+    getLatestVersion: async () => "1.0.1", updateStatePath: path.join(root, "update-state.json"),
+    spawnUpdate: () => { launches.push(clock); return answer === "busy" ? { status: "busy", requestId: `r${launches.length}` } : { status: "admitted", requestId: "won" }; },
+    checkIntervalMs: 0, restartCooldownMs: 0,
+  });
+  assert.equal((await updater.tick()).status, "worker-busy");
+  for (let i = 0; i < 11; i += 1) {
+    clock += 5000;
+    assert.equal((await updater.tick()).status, "deferred-worker-busy", `tick ${i}`);
+  }
+  assert.equal(launches.length, 1, "no worker is started while the other updater has the lock");
+  clock += 5000;
+  answer = "admitted";
+  assert.equal((await updater.tick()).status, "updating", "after a minute it asks again");
+  assert.equal(launches.length, 2);
+});

@@ -30,9 +30,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, platform: darwin-arm64, mode: fresh }
+          - { os: macos-15, platform: darwin-arm64, mode: fresh }
           - { os: macos-15-intel, platform: darwin-x64, mode: fresh }
-          - { os: macos-14, platform: darwin-arm64, mode: leftover }
+          - { os: macos-15, platform: darwin-arm64, mode: leftover }
           - { os: macos-15-intel, platform: darwin-x64, mode: leftover }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20

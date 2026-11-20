@@ -107,7 +107,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             platform: darwin-arm64
           - os: macos-15-intel
             platform: darwin-x64
@@ -138,7 +138,7 @@ jobs:
       - name: Prove broker security, isolation and MCP parity on macOS and Windows
         # Linux runs these in the identity job. macOS and Windows ran them in
         # the private repository's hosted matrix until its budget ran out.
-        if: matrix.os == 'macos-14' || matrix.os == 'windows-latest'
+        if: matrix.os == 'macos-15' || matrix.os == 'windows-latest'
         run: node --test --test-concurrency=1 test/mcp-broker.test.mjs test/mcp-startup.test.mjs test/mcp-tools.test.mjs
       - name: Prove owned Node and recovery survive macOS shared-library relocation
         if: startsWith(matrix.platform, 'darwin-')

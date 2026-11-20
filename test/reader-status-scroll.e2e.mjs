@@ -29,8 +29,11 @@ try {
     // Long enough that every fixed scroll offset below is reachable: the
     // one-bar Open in box (c3ed1fcc) shortened the reader past 450px.
     window.testRow = row;
+    // The sender is a contact: a new sender's Task opens on its locked row
+    // until Add contact (f56d8264), never in the reader.
     window.testPayload = { account:{ paired:true, userId:"motion-test", name:"Test Reader", email:"self@example.com" },
-      ui:{ soundsMuted:true }, features:{}, relays:[row], sent:[], contacts:[], chats:[] };
+      ui:{ soundsMuted:true }, features:{}, relays:[row], sent:[],
+      contacts:[{ id:"contact-sender", name:"Test Sender", email:"sender@example.com" }], chats:[] };
     window.relay = new Proxy({ isTestOverlay:true, refresh:async () => testPayload,
       onInbox:callback => window.pushTestPayload = callback,
       rendererReady:() => window.ready = true,

@@ -2358,7 +2358,7 @@ test("public export retains the stock Mac candidate canary", () => {
       || fs.existsSync(new URL(`../scripts/${script}`, import.meta.url)), true);
   }
   assert.match(workflow, /runs-on: \$\{\{ matrix\.os \}\}/);
-  assert.match(workflow, /macos-14/);
+  assert.match(workflow, /macos-15/);
   assert.match(workflow, /macos-15-intel/);
   assert.match(workflow, /node scripts\/verify-stock-handover\.mjs/);
   const releaseGateTemplate = new URL("../public-release/.github/workflows/verify-companion-release-gate.yml", import.meta.url);

@@ -21,8 +21,11 @@ try {
   });
   await page.goto(new URL("../overlay/inbox.html", import.meta.url).href);
   await page.waitForFunction(() => window.ready);
+  // The sender is a contact: a new sender's Task opens on its locked row
+  // until Add contact (f56d8264), and the locked row has no Execute.
   const fixture = {
-    account: { paired: true, userId: "self", email: "self@example.com" }, ui: { soundsMuted: true }, features: { requests: true, taskExecution: false }, contacts: [], sent: [], outbox: [],
+    account: { paired: true, userId: "self", email: "self@example.com" }, ui: { soundsMuted: true }, features: { requests: true, taskExecution: false },
+    contacts: [{ id: "contact-sender", name: "Test Sender", email: "sender@example.com" }], sent: [], outbox: [],
     relays: [{ id: "task-native", kind: "task", relayNotificationKind: "task", title: "Native launch", forHuman: "Check this Task", forAgent: "Context", senderName: "Test Sender", senderEmail: "sender@example.com", createdAt: new Date().toISOString(), attachments: [] }],
   };
   await page.evaluate((input) => { onPayload(input); openReader("task-native", "relays"); }, fixture);

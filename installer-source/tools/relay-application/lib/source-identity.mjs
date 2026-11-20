@@ -10,7 +10,7 @@ export function gitBlob(bytes) {
 export function verifySourceSnapshot(directory) {
   const manifest = JSON.parse(fs.readFileSync(path.join(directory, "source.json"), "utf8"));
   assert.equal(manifest.schema, 1);
-  assert.equal(manifest.repository, "davidkariuki123/relay");
+  assert.equal(manifest.repository, "SendRelays/relay");
   assert.match(manifest.sourceSha || "", /^[a-f0-9]{40}$/);
   assert.ok(Object.keys(manifest.files || {}).length > 0);
   for (const [file, blob] of Object.entries(manifest.files)) {

@@ -99,6 +99,11 @@ test("local ids cannot resolve arbitrary paths, missing files, or symlinks outsi
   const { root, entry, cache } = fixture(t);
   const outside = path.join(root, "private.txt");
   fs.writeFileSync(outside, "private");
+  // A spool file that is gone cannot be resolved either. Its own fixture: any
+  // resolveLocal call caches every file of the entry it can still read.
+  const missing = fixture(t);
+  fs.rmSync(missing.entry.files[1].spoolPath);
+  assert.equal(missing.cache.resolveLocal(`outbox:${missing.entry.id}`, "file-1", [missing.entry]).ok, false);
   if (canSymlink()) {
     fs.rmSync(entry.files[0].spoolPath);
     fs.symlinkSync(outside, entry.files[0].spoolPath);
@@ -106,9 +111,6 @@ test("local ids cannot resolve arbitrary paths, missing files, or symlinks outsi
   } else {
     t.diagnostic(`symlink escape not checked: ${SYMLINK_SKIP_REASON}`);
   }
-  // A spool file that is gone cannot be resolved either.
-  fs.rmSync(entry.files[1].spoolPath);
-  assert.equal(cache.resolveLocal(`outbox:${entry.id}`, "file-1", [entry]).ok, false);
   assert.equal(cache.resolveLocal(`outbox:${entry.id}`, "../../private.txt", [entry]).ok, false);
   assert.equal(cache.resolveLocal("outbox:unknown", "file-0", [entry]).ok, false);
   assert.equal(cache.resolveLocal(`outbox:${entry.id}`, "file-500", [entry]).ok, false);

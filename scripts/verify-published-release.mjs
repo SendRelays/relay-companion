@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export const PACKAGE_NAME = "relay-companion";
-export const PUBLIC_REPOSITORY = "https://github.com/davidkariuki123/relay-companion";
+export const PUBLIC_REPOSITORY = "https://github.com/SendRelays/relay-companion";
 export const PUBLIC_REGISTRY = "https://registry.npmjs.org";
 export const SLSA_PROVENANCE_V1 = "https://slsa.dev/provenance/v1";
 export const GITHUB_WORKFLOW_BUILD_TYPE = "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1";
@@ -333,7 +333,7 @@ export async function verifyPublishedRelease({
 
   const sourceResponse = await checkedFetch(
     fetchImpl,
-    `https://raw.githubusercontent.com/davidkariuki123/relay-companion/${expectedSha}/package.json`,
+    `https://raw.githubusercontent.com/SendRelays/relay-companion/${expectedSha}/package.json`,
     "public source",
   );
   validatePublicSourcePackage(await sourceResponse.json());

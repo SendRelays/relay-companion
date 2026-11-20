@@ -5,10 +5,10 @@
   "homepage": "https://sendrelays.com/get-started",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/davidkariuki123/relay-companion.git"
+    "url": "git+https://github.com/SendRelays/relay-companion.git"
   },
   "bugs": {
-    "url": "https://github.com/davidkariuki123/relay-companion/issues"
+    "url": "https://github.com/SendRelays/relay-companion/issues"
   },
   "author": "Relay <hello@sendrelays.com>",
   "license": "MIT",

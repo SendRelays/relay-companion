@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "repository": "davidkariuki123/relay",
-  "sourceSha": "14aa0029d8b47f95d02e4f443bb91e150f2bb48f",
+  "repository": "SendRelays/relay",
+  "sourceSha": "f62cf4d8630e66d2a3c0b4bbb23fcbd19ddbfec7",
   "files": {
     "packages/companion/bootstrap/application-bridge.cjs": "17f2a4d087cc09996c596b3e53033cc500dedb7f",
     "packages/companion/bootstrap/application-handoff.cjs": "cc857469bd3e01c1c2bd00816e5f4338083f0aaa",
@@ -64,7 +64,7 @@
     "packages/companion/overlay/fonts/plexmono-500.woff2": "3308bce2432c298817ed344eeac33007c83cecd0",
     "packages/companion/overlay/inbox.html": "9c76a3ca5acf2e87dbfc0e436ff65d602be8cec4",
     "packages/companion/overlay/relay-anyone-tip.cjs": "4cec8b4a5eb232635b811aef04975c85461580f3",
-    "packages/companion/package.json": "91e1afddadda6be437670590e1cc90d0917d4a27",
+    "packages/companion/package.json": "e7a35fef20dfc1f48ff8fc5cbb79fc2b34b707b7",
     "packages/companion/scripts/prepare-linux-electron-sandbox.mjs": "3034031ebe105a8e5e101fbf30b83a123c97630c",
     "packages/companion/scripts/verify-runtime-manifest.mjs": "6d791b9f8ec5db3c3cd444e976ae751f2e7d0744",
     "tools/relay-application/app/activate.cjs": "f0dfe6e08a26d7c0bd6bfca91f15f2fc887ed477",
@@ -94,7 +94,7 @@
     "tools/relay-application/lib/relay-icon-1024.png": "5fbd431a6dd9d5bd5a14ef334029e35a1ecce5d7",
     "tools/relay-application/lib/relay.icns": "5183952b973bd0c574e7f8b6d580bbcb0fa7e139",
     "tools/relay-application/lib/release-policy.cjs": "9bb32b164bf13d3c15ffdc292548aa14aeb3a7b1",
-    "tools/relay-application/lib/source-identity.mjs": "2614b3b26c1f46d8dad98cd727a7cc7b0048ddb7",
+    "tools/relay-application/lib/source-identity.mjs": "788bbb6937eb4ec68cb94d4c90667edc217009d5",
     "tools/relay-application/native-install-proof.mjs": "5da576d4336f37ccb71ba21788261db1f720b601",
     "tools/relay-application/package-lock.json": "ebeb98fc0a88fe00e2ed7aee7f607a0d2ee5829b",
     "tools/relay-application/package.json": "a5ea48764be9ae610032e15beabe07ed8cf00374",

@@ -42,7 +42,7 @@ export function assertDisposable(env = process.env, platform = process.platform)
   assert.equal(platform, "darwin", "Use a disposable Mac runner");
   assert.equal(env.GITHUB_ACTIONS, "true");
   assert.equal(env.RUNNER_ENVIRONMENT, "github-hosted");
-  assert.equal(env.GITHUB_REPOSITORY, "davidkariuki123/relay-companion");
+  assert.equal(env.GITHUB_REPOSITORY, "SendRelays/relay-companion");
   assert.equal(env.GITHUB_REF, "refs/heads/main");
   assert.ok(env.RUNNER_TEMP && path.isAbsolute(env.RUNNER_TEMP));
 }

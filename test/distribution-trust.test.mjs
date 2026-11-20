@@ -446,7 +446,7 @@ test("published release identity requires public source, integrity, and npm prov
     version,
     relayDistribution: "thin-installer",
     gitHead: sourceSha,
-    repository: { url: "git+https://github.com/davidkariuki123/relay-companion.git" },
+    repository: { url: "git+https://github.com/SendRelays/relay-companion.git" },
     dist: {
       tarball: `${PUBLIC_REGISTRY}/relay-companion/-/relay-companion-1.2.3.tgz`,
       integrity,
@@ -499,12 +499,12 @@ test("verified npm provenance is bound to exact public workflow, source, and tar
         externalParameters: {
           workflow: {
             ref: "refs/heads/main",
-            repository: "https://github.com/davidkariuki123/relay-companion",
+            repository: "https://github.com/SendRelays/relay-companion",
             path: ".github/workflows/release.yml",
           },
         },
         resolvedDependencies: [{
-          uri: "git+https://github.com/davidkariuki123/relay-companion@refs/heads/main",
+          uri: "git+https://github.com/SendRelays/relay-companion@refs/heads/main",
           digest: { gitCommit: sourceSha },
         }],
       },
@@ -555,7 +555,7 @@ test("packed thin installer contains only the reviewed dependency-free bootstrap
       name: "relay-companion",
       version,
       relayDistribution: "thin-installer",
-      repository: "https://github.com/davidkariuki123/relay-companion",
+      repository: "https://github.com/SendRelays/relay-companion",
       publishConfig: { access: "public", provenance: true },
       scripts: {},
       dependencies: {},
@@ -2279,7 +2279,7 @@ test("public release owns immutable publication while private promotion owns fle
     : new URL("../.github/workflows/verify-companion-dev-update.yml", import.meta.url);
   if (fs.existsSync(privatePromotion)) {
     assert.equal(fs.existsSync(recoveryCanaryTemplate), true, "the stock recovery canary workflow must exist");
-    assert.match(fs.readFileSync(catchupPromotion, "utf8"), /canary_repository=davidkariuki123\/relay-companion/, "catch-up reads the canary's runs where it runs");
+    assert.match(fs.readFileSync(catchupPromotion, "utf8"), /canary_repository=SendRelays\/relay-companion/, "catch-up reads the canary's runs where it runs");
   }
   if (fs.existsSync(recoveryCanary)) {
     const canary = fs.readFileSync(recoveryCanary, "utf8");
@@ -2296,7 +2296,7 @@ test("public release owns immutable publication while private promotion owns fle
   if (fs.existsSync(privateImport)) {
     const importWorkflow = fs.readFileSync(privateImport, "utf8");
     assert.doesNotMatch(importWorkflow, /packages\/companion\//, "the public checkout has these scripts at its root");
-    assert.match(importWorkflow, /test "\$GITHUB_REPOSITORY" = "davidkariuki123\/relay-companion"/);
+    assert.match(importWorkflow, /test "\$GITHUB_REPOSITORY" = "SendRelays\/relay-companion"/);
     assert.match(importWorkflow, /\(cd "\$root" && tar -xzf runtime\.tar\.gz\)/);
     assert.doesNotMatch(importWorkflow, /tar -xzf "\$archive"/);
     assert.match(importWorkflow, /npx --yes --no-audit --no-fund "relay-companion@\$VERSION" setup/);

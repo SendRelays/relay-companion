@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   native:
-    if: github.repository == 'davidkariuki123/relay-companion' && github.ref == 'refs/heads/main'
+    if: github.repository == 'SendRelays/relay-companion' && github.ref == 'refs/heads/main'
     name: ${{ matrix.platform }} ${{ matrix.mode }} installer
     strategy:
       fail-fast: false

@@ -64,7 +64,7 @@ jobs:
           LIVE_SERVICES: ${{ inputs.live_services }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REPOSITORY" = "davidkariuki123/relay-companion"
+          test "$GITHUB_REPOSITORY" = "SendRelays/relay-companion"
           [[ "$FROM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$TO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]

@@ -63,7 +63,7 @@ test("installer proof requires exact identity and never prepares a newer baselin
 
 test("native installer mutations refuse local machines, private jobs and other refs", () => {
   const env = { GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "github-hosted",
-    GITHUB_REPOSITORY: "davidkariuki123/relay-companion", GITHUB_REF: "refs/heads/main", RUNNER_TEMP: process.cwd() };
+    GITHUB_REPOSITORY: "SendRelays/relay-companion", GITHUB_REF: "refs/heads/main", RUNNER_TEMP: process.cwd() };
   assertDisposable(env, "darwin");
   for (const field of Object.keys(env)) assert.throws(() => assertDisposable({ ...env, [field]: "" }, "darwin"));
   assert.throws(() => assertDisposable(env, "win32"));

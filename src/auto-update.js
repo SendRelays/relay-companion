@@ -17,7 +17,9 @@ import {
   UPDATE_CHANNEL_STAGING,
   normalizeUpdateChannel,
   updateChannel,
+  accountIdentity,
 } from "./config.js";
+import { readRuntimeCohort, cohortDecision } from "./runtime-cohort.js";
 import { storeDir } from "./host-paths.js";
 import { readAutostartDaemonRoot } from "./autostart-registration.js";
 import {
@@ -42,6 +44,7 @@ const STABLE_RUNTIME_MANIFEST = "https://api.sendrelays.com/v1/companion-release
 const releaseTrust = createRequire(import.meta.url)("./release-trust.json");
 const { RELEASE_ALGORITHM, verifyReleaseEnvelope } = createRequire(import.meta.url)("../bootstrap/release-signature.cjs");
 const { systemdRunEnvironmentArgs } = createRequire(import.meta.url)("../bootstrap/linux-systemd.cjs");
+const sleepClock = createRequire(import.meta.url)("../bootstrap/sleep-clock.cjs");
 // A production publish should reach an idle machine promptly. The registry request is
 // a tiny dist-tags document and the daemon is the only checker, so one minute gives us
 // fast fleet convergence without meaningful registry load.
@@ -258,6 +261,8 @@ export async function fetchLatestVersion({
   trustStore = releaseTrust,
   stableManifestUrl = STABLE_RUNTIME_MANIFEST,
   onError = () => {},
+  deviceId = () => accountIdentity().deviceId,
+  readCohort = readRuntimeCohort,
 } = {}) {
   if (typeof fetchImpl !== "function") return null;
   try {
@@ -268,7 +273,21 @@ export async function fetchLatestVersion({
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response?.ok) return null;
-      return versionFromSignedRuntimeManifest(await response.json(), publicKeyPem || trustStore, onError);
+      const general = versionFromSignedRuntimeManifest(await response.json(), publicKeyPem || trustStore, onError);
+      if (!general || publicKeyPem) return general;
+      // A device named in the runtime cohort takes its newer version first
+      // (src/runtime-cohort.js). Any problem reading it leaves the general one.
+      try {
+        const cohort = await readCohort({ fetchImpl, trustStore, now, timeoutMs });
+        let id = "";
+        try { id = deviceId(); } catch {}
+        if (cohort && cohortDecision(cohort.payload, { deviceId: id, now: now() }) === "member" && isNewerVersion(cohort.payload.version, general)) {
+          return cohort.payload.version;
+        }
+      } catch (error) {
+        try { onError(error); } catch {}
+      }
+      return general;
     }
     const base = String(registry || DEFAULT_REGISTRY).replace(/\/+$/, "");
     // Query only the mutable dist-tags document. A unique query plus explicit
@@ -631,6 +650,7 @@ export function createAutoUpdater({
   log = () => {},
   explicitRepair = false,
   releasePolicy = recoveryPolicy({ now }),
+  slept = () => sleepClock.sleptMs(),
 } = {}) {
   // This is the version of the code loaded in THIS process, not a fresh read of the
   // package.json on every tick. If npm writes a new tree but launchctl restart fails,
@@ -890,15 +910,27 @@ export function createAutoUpdater({
         version: runningVersion, targetVersion, channel: checkedChannel }, { scope: diagnosticScope });
     };
     recordDiscovery("started");
+    let sleptBefore = null;
+    try { sleptBefore = slept(); } catch {}
+    // A check that started in one brief wake of a sleeping Mac times out in the
+    // next: say so, and do not let it lengthen the retry backoff.
+    const interruptedBySleep = () => { try { return sleepClock.sleptBetween(sleptBefore, slept()); } catch { return false; } };
+    let interrupted = false;
     try {
       let discoveryError;
       latest = await getLatestVersion({ channel: checkedChannel, onError: error => { discoveryError = error; } });
-      recordDiscovery(latest ? "succeeded" : "failed", latest ? null : discoveryError || "unclassified", latest);
+      interrupted = !latest && interruptedBySleep();
+      recordDiscovery(latest ? "succeeded" : "failed", latest ? null : interrupted ? "interrupted-by-sleep" : discoveryError || "unclassified", latest);
     } catch (err) {
-      recordDiscovery("failed", err);
-      log(`auto-update registry check failed: ${err && err.message ? err.message : String(err)}`);
+      interrupted = interruptedBySleep();
+      recordDiscovery("failed", interrupted ? "interrupted-by-sleep" : err);
+      log(`auto-update registry check failed${interrupted ? " (the computer slept during it)" : ""}: ${err && err.message ? err.message : String(err)}`);
     } finally {
       state.checking = false;
+    }
+    if (!latest && interrupted) {
+      state.nextCheckAt = 0;
+      return { status: "check-interrupted-by-sleep", current: runningVersion };
     }
     if (!latest) {
       state.consecutiveCheckFailures += 1;
@@ -1282,7 +1314,11 @@ export function createAutoUpdater({
     return pending || launchPending(t) || discovery;
   }
 
-  return { tick, state, runningVersion, bootChannel };
+  // The machine just woke: check now instead of waiting out a backoff that
+  // sleep-interrupted checks may have built up before this build.
+  const wake = () => { state.nextCheckAt = 0; };
+
+  return { tick, state, runningVersion, bootChannel, wake };
 }
 
 // One-shot for the `relay update` CLI: check once and, if a newer version exists,
@@ -1319,6 +1355,9 @@ export async function runUpdateOnce({
       break;
     case "check-failed":
       log("could not reach the npm registry to check for updates.");
+      break;
+    case "check-interrupted-by-sleep":
+      log("the computer slept during the update check; run it again.");
       break;
     case "unsupported-platform":
       log("self-update is supported on 64-bit macOS, Windows, and Linux — update this unsupported platform with `npm i -g relay-companion@latest`.");

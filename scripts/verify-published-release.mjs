@@ -235,7 +235,10 @@ export function validateInstalledPackageShape(packageRoot, { version, distributi
     // Electron app (ao1, 2026-10-09): Node builtins only, plus electron's own
     // module inside that Electron-app branch.
     const electronAsNodeBootstrap = [...backgroundIdentityBootstrap, "electron-as-node.cjs"].sort();
-    if (![legacyBootstrap, recoveryBootstrap, resilientBootstrap, monitoredBootstrap, macRecoveryBootstrap, responsiveRecoveryBootstrap, configRecoveryBootstrap, bundledNodeBootstrap, daemonProgressBootstrap, applicationBootstrap, handoffBootstrap, rulesBootstrap, transactionBootstrap, lifecycleBootstrap, diagnosticBootstrap, installerRecoveryBootstrap, previousPillBootstrap, backgroundIdentityBootstrap, electronAsNodeBootstrap].some(shape => JSON.stringify(bootstrapFiles) === JSON.stringify(shape))) {
+    // Telling a sleeping computer from a hung service (2026-11-20): reads
+    // os.uptime and process.hrtime only.
+    const sleepClockBootstrap = [...electronAsNodeBootstrap, "sleep-clock.cjs"].sort();
+    if (![legacyBootstrap, recoveryBootstrap, resilientBootstrap, monitoredBootstrap, macRecoveryBootstrap, responsiveRecoveryBootstrap, configRecoveryBootstrap, bundledNodeBootstrap, daemonProgressBootstrap, applicationBootstrap, handoffBootstrap, rulesBootstrap, transactionBootstrap, lifecycleBootstrap, diagnosticBootstrap, installerRecoveryBootstrap, previousPillBootstrap, backgroundIdentityBootstrap, electronAsNodeBootstrap, sleepClockBootstrap].some(shape => JSON.stringify(bootstrapFiles) === JSON.stringify(shape))) {
       throw new Error("Thin installer bootstrap contents do not match the reviewed shape");
     }
     const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "skill", "manifest.json"), "utf8"));

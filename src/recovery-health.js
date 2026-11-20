@@ -4,25 +4,35 @@ import { createRequire } from "node:module";
 const { write } = createRequire(import.meta.url)("../bootstrap/recovery-launcher.cjs");
 const version = createRequire(import.meta.url)("../package.json").version;
 const { installationId } = createRequire(import.meta.url)("../bootstrap/installation-health.cjs");
+const sleepClock = createRequire(import.meta.url)("../bootstrap/sleep-clock.cjs");
 // apiOkAt: when this daemon last got any HTTP answer from Relay. The pill reads
 // it to decide whether a long run of its own failures is Relay being down or
 // its own transport being wedged (src/pill-liveness.cjs).
 export function startRecoveryHeartbeat({ homeDir = os.homedir(), hasActiveWork = () => false, apiOkAt = () => 0,
-  now = Date.now, setIntervalImpl = setInterval } = {}) {
+  now = Date.now, setIntervalImpl = setInterval, slept = () => sleepClock.sleptMs(), onWake = () => {} } = {}) {
   const file = path.join(homeDir, ".relay", "recovery", "daemon.json");
   try { write(path.join(homeDir, ".relay", "recovery", "policy.json"), { autoUpdate: !/^(0|false|off|no)$/i.test(String(process.env.RELAY_AUTO_UPDATE || "")) }); } catch {}
   try { installationId({ homeDir, create: true }); } catch {}
   let lastTick = now(), awakeSince = lastTick;
+  // sleptMs and sleeps let health checks tell a machine that slept from a
+  // daemon that hung (bootstrap/sleep-clock.cjs).
+  let previous = { at: null, sleptMs: null, sleeps: [] };
   const tick = () => {
     const at = now();
     // Sleep, a clock jump or a long process pause needs a new observation window.
     if (at < lastTick || at - lastTick > 2 * 60_000) awakeSince = at;
     lastTick = at;
+    let sleptMs = null;
+    try { sleptMs = slept(); } catch {}
+    const sleeps = sleepClock.recordTick({ previous, at, slept: sleptMs });
+    const woke = sleeps.at(-1)?.to === at;
+    previous = { at, sleptMs, sleeps };
+    if (woke) { awakeSince = at; try { onWake(at); } catch {} }
     let busy = true;
     try { busy = Boolean(hasActiveWork()); } catch {}
     let lastApiOkAt = 0;
     try { lastApiOkAt = Number(apiOkAt()) || 0; } catch {}
-    try { write(file, { schema: 1, pid: process.pid, version, busy, activityVersion: 1, awakeSince, at, apiOkAt: lastApiOkAt }); } catch {}
+    try { write(file, { schema: 1, pid: process.pid, version, busy, activityVersion: 1, awakeSince, at, apiOkAt: lastApiOkAt, sleptMs, sleeps }); } catch {}
   };
   tick();
   const timer = setIntervalImpl(tick, 5000);

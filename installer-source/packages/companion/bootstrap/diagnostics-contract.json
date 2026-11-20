@@ -85,7 +85,9 @@
     "transaction-lock-unavailable",
     "rollback-threw",
     "runtime-node-missing",
-    "runtime-npm-missing"
+    "runtime-npm-missing",
+    "interrupted-by-sleep",
+    "check-timed-out"
   ],
   "runtimeStates": [
     "active",

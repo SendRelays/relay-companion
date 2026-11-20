@@ -22,6 +22,9 @@ function readRegistration(label, { homeDir = os.homedir(), run = defaultRun, fsI
   const file = path.join(homeDir, "Library", "LaunchAgents", `${label}.plist`);
   const bytes = contents ?? fsImpl.readFileSync(file, "utf8");
   const decoded = run("/usr/bin/plutil", ["-convert", "json", "-o", "-", "--", "-"], { input: bytes });
+  // plutil killed by the timeout says nothing about the file: a sleeping Mac's
+  // brief wake ends mid-check (2026-11-20).
+  if (decoded?.error?.code === "ETIMEDOUT" || (decoded?.signal && decoded?.status === null)) throw Error(`check-timed-out: ${label}`);
   if (!commandOk(decoded)) throw Error(`invalid-service-plist: ${label}`);
   const plist = JSON.parse(decoded.stdout);
   const args = plist.ProgramArguments;

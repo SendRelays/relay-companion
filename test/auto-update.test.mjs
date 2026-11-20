@@ -1192,3 +1192,31 @@ test("an offline v2 client can cross a retained bridge before reading the v3 fee
   assert.equal(await fetchLatestVersion({channel:"stable",trustStore:overlap,fetchImpl}),"0.1.901");
   assert.equal(await fetchLatestVersion({channel:"stable",trustStore:oldTrust,fetchImpl}),null,"old clients cannot skip the bridge and trust an unknown signer");
 });
+
+test("an update check the computer slept through is not a failure and is retried at once", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-sleep-check-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packageRoot = path.join(os.homedir(), ".relay", "runtime", "releases", "test", "node_modules", "relay-companion");
+  const build = (sleptAfter, name) => {
+    let readings = 0;
+    return createAutoUpdater({
+      platform: "darwin", packageRoot, releasePolicy: recoveryPolicy({ root, now: () => 100000 }), now: () => 100000,
+      getCurrentVersion: () => "1.0.0", getCurrentChannel: () => "stable",
+      getCanonicalRuntime: () => ({ packageRoot, version: "1.0.0" }), getCanonicalRuntimeState: () => null,
+      getLatestVersion: async () => null, updateStatePath: path.join(root, name),
+      spawnUpdate: () => ({ status: "admitted" }), checkIntervalMs: 0, restartCooldownMs: 0,
+      // The first reading is taken when the check starts, the second when it ends.
+      slept: () => (readings++ === 0 ? 1000 : sleptAfter),
+    });
+  };
+  const slept = build(1000 + 16 * 60_000, "slept.json");
+  assert.equal((await slept.tick()).status, "check-interrupted-by-sleep");
+  assert.equal(slept.state.consecutiveCheckFailures, 0);
+  assert.equal(slept.state.nextCheckAt, 0);
+  const failed = build(1000, "failed.json");
+  assert.equal((await failed.tick()).status, "check-failed");
+  assert.equal(failed.state.consecutiveCheckFailures, 1);
+  assert.ok(failed.state.nextCheckAt > 100000);
+  failed.wake();
+  assert.equal(failed.state.nextCheckAt, 0);
+});

@@ -1034,9 +1034,11 @@ async function runTaskDaemonImpl({ intervalMs = 4000, health } = {}) {
   // scheduled recovery runner discovers the same release within minutes and
   // must not download or activate against an installer this process launched.
   let updaterInFlight = () => false;
+  let updaterWake = () => {};
   startRecoveryHeartbeat({
     hasActiveWork: () => hasActiveTurns() || activeSessionOperationCount() > 0 || updaterInFlight(),
     apiOkAt: () => relayTransportHealth().lastSuccessAt,
+    onWake: () => updaterWake(),
   });
   try {
     const packageRoot = companionPackageRoot();
@@ -1055,6 +1057,7 @@ async function runTaskDaemonImpl({ intervalMs = 4000, health } = {}) {
     hasActiveWork: () => hasActiveTurns() || activeSessionOperationCount() > 0 || signInInProgress(),
   });
   updaterInFlight = () => autoUpdater.state?.updating === true;
+  updaterWake = () => autoUpdater.wake?.();
   // Exit once the replacement tree is on disk.
   const bootPackageRoot = companionPackageRoot();
   const bootVersion = currentCompanionVersion(bootPackageRoot);

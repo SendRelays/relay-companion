@@ -52,7 +52,10 @@ function macPillLaunch({ homeDir, current, run }) {
   try { record = mac.readRegistration(PILL_LABEL, { homeDir, run }); }
   catch (error) {
     // The first token only (ENOENT, invalid-service-plist, ...): never a path.
-    return { ok: false, reason: `registration-invalid: ${String(error?.code || error?.message || "unknown").split(/[:\s]/)[0].slice(0, 40)}` };
+    const code = String(error?.code || error?.message || "unknown").split(/[:\s]/)[0].slice(0, 40);
+    // A check that timed out learned nothing about the registration.
+    if (code === "check-timed-out") return null;
+    return { ok: false, reason: `registration-invalid: ${code}` };
   }
   if (record.releaseExecutable) {
     const identity = require("./mac-background-identity.cjs");
@@ -111,8 +114,12 @@ function componentInventory(commands, activeVersion = null) {
   const mixed = components.some(c => c.version && activeVersion && c.version !== activeVersion);
   return { components: components.slice(0, 12), duplicates, mixed };
 }
+// Failures a sleeping machine produces on its own: the daemon cannot answer and
+// checks time out while the computer is asleep or has only just woken.
+const SLEEP_EXPLAINED = new Set(["daemon-not-responsive", "component-failed", "recovery-failed"]);
 function collectInstallationHealth({ homeDir = os.homedir(), platform = process.platform, arch = process.arch,
-  osVersion = os.release(), commands, now = Date.now(), run = defaultRun, env = process.env } = {}) {
+  osVersion = os.release(), commands, now = Date.now(), run = defaultRun, env = process.env,
+  slept = require("./sleep-clock.cjs").sleptMs({ platform }) } = {}) {
   const root = path.join(homeDir, ".relay"), current = read(path.join(root, "runtime", "current.json"));
   const activeVersion = current?.active === true ? current.version : null;
   const processCommands = commands || runtimeProcessCommands(platform);
@@ -144,13 +151,17 @@ function collectInstallationHealth({ homeDir = os.homedir(), platform = process.
   else if (progressMatches && ["offline", "signed-out"].includes(progress.phase)) serviceHealth = { ...serviceHealth, state: "waiting", reason: progress.phase };
   else if (monitorFailure || supervisor?.ok === false) serviceHealth = { ...serviceHealth, state: "degraded", reason: "recovery-failed" };
   else if (!progressSupported) serviceHealth = { ...serviceHealth, state: "unverified", reason: "legacy-readiness" };
+  const power = require("./sleep-clock.cjs").powerState({ heartbeat, now, slept });
+  if (["resuming", "brief-wakes"].includes(power.state) && SLEEP_EXPLAINED.has(serviceHealth.reason)) {
+    serviceHealth = { ...serviceHealth, state: "waiting", reason: "resuming-from-sleep" };
+  }
   const transport = (name) => {
     const report = read(path.join(root, "transport-health", `${name}.json`));
     return report?.at > 0 && now >= report.at ? new Date(report.at).toISOString() : null;
   };
   return {
     installationId: installationId({ homeDir }), os: platform, osVersion: osVersion.slice(0, 80), arch,
-    ...inventory, daemonResponsive, health: serviceHealth, pill,
+    ...inventory, daemonResponsive, health: serviceHealth, pill, power,
     recovery: supervisor || monitorFailure ? { status: supervisor?.status || monitor.state, version: supervisor?.launcherVersion || null,
       checkedAt: supervisor?.checkedAt > 0 ? new Date(supervisor.checkedAt).toISOString() : null,
       desiredVersion: supervisor?.desiredVersion || null,
@@ -174,6 +185,7 @@ function describeInstallationHealth(installation) {
     "pill-missing": "Relay app is not running", "pill-stopped": "Relay app was quit",
     "recovery-failed": "Recovery needs attention", "offline": "Waiting for Relay's connection", "signed-out": "Waiting for sign-in",
     "runtime-not-active": "Runtime health has not been verified", "legacy-readiness": "Background service running; readiness not verified",
+    "resuming-from-sleep": "Computer is asleep or just woke; checks resume once it stays awake",
     "ready": "Relay is running" })[reason] || "Runtime health has not been verified";
   return message + (["restarting", "reactivating", "restoring-local", "downloading"].includes(installation?.recovery?.status) ? "; recovery in progress" : "");
 }

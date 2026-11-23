@@ -84,10 +84,9 @@ test("a conversation is named only by its person or saved group", () => {
   assert.doesNotMatch(html, /explicitTitle|allTopics|topicsPanelOpen|Search topics|>Topics</);
   const chat = html.slice(html.indexOf("function renderChat()"), html.indexOf("function renderThreads()"));
   assert.doesNotMatch(chat, /tb-group/);
-  // One list of chats (David, 2026-10-07): Slack-linked rooms sit in the same
-  // list, so there is no Slack list without People and no surface switch.
+  // One list of chats (David, 2026-10-07): no surface switch.
   const sections = html.slice(html.indexOf("function chatSections()"), html.indexOf("function chatRoomForThread("));
-  assert.doesNotMatch(sections, /conversationSurface\(\)|surface === "slack"/);
+  assert.doesNotMatch(sections, /conversationSurface\(\)/);
 });
 
 // Extract only the function under test; nearby UI copy is not a JS boundary.
@@ -118,8 +117,8 @@ test("the Relays tab is one latest-message row per exact identity", () => {
   };
   const quiet = { name: "New group", hasActivity: false, latest: { at: "2026-08-13T14:00:00Z" } };
   // Nobody here is a stranger: every room is known, so no request is hidden.
-  const relayIdentityRows = Function("chatSections", "knownAddresses", "isRequestRoom", "slackChannelRoomListed", "ignoredRequestKeys", `"use strict"; ${identitySource}; return relayIdentityRows;`)(
-    () => ({ rooms: [shane, granular, quiet] }), () => new Set(), () => false, () => false, () => new Set(),
+  const relayIdentityRows = Function("chatSections", "knownAddresses", "isRequestRoom", "ignoredRequestKeys", `"use strict"; ${identitySource}; return relayIdentityRows;`)(
+    () => ({ rooms: [shane, granular, quiet] }), () => new Set(), () => false, () => new Set(),
   );
   const rows = relayIdentityRows();
   assert.deepEqual(rows, [{ ...shane, requestRoom: false }, { ...granular, requestRoom: false }]);
@@ -130,8 +129,7 @@ test("the Relays tab is one latest-message row per exact identity", () => {
   assert.match(render, /const allRows = threadMessages\(\)[\s\S]*?\.sort\(\(a, b\) => new Date\(b\.at/);
   assert.match(identitySource, /const \{ rooms \} = chatSections\(\)/);
   // A stranger's first message sits here too, locked (2026-10-28).
-  // Slack channels you are in are listed before anyone writes in them.
-  assert.match(identitySource, /filter\(\(room\) => room\.hasActivity !== false \|\| slackChannelRoomListed\(room\)\)/);
+  assert.match(identitySource, /filter\(\(room\) => room\.hasActivity !== false\)/);
   assert.match(identitySource, /requestRoom: isRequestRoom\(room, known\)/);
   assert.match(identitySource, /latestAt: room\.latestAt \|\| \(room\.latest && room\.latest\.at\)/);
   assert.doesNotMatch(identitySource, /message\.party|message\.partyKey|new Map/,
@@ -244,7 +242,7 @@ test("per-party colors are stable across conversations and restarts", () => {
   assert.match(html, /h = \(h \* 31 \+ key\.charCodeAt\(i\)\) >>> 0/);
   assert.match(html, /return `p\$\{h % 8\}`/);
   assert.match(html, /\.th-party\.p0 \{ color:#4a6b5f; \}/);
-  assert.match(html, /\.th-party\.me \{ color:var\(--muted\); \}/);
+  assert.match(html, /\.th-party\.me \{ color:var\(--accent\); \}/, "\"You\" takes the accent colour, matching your bubbles");
 });
 
 test("every outbound Relay uses the incoming rectangle geometry on the right", () => {
@@ -254,7 +252,7 @@ test("every outbound Relay uses the incoming rectangle geometry on the right", (
   assert.match(html, /const author = RelayChatPresentation\.chatMessageAuthorPresentation\(/);
   assert.match(html, /const who = m\.ownedAgent \? author\.label : mine \? me : m\.party;/);
   // "You", not the account name: the pill is a personal surface, only ever
-  // read by its owner (Slack shows your name because its rooms are shared).
+  // read by its owner.
   assert.match(html, /const me = "You";/);
   assert.match(html, /\$\{mine \? " mine" : ""\}/);
   assert.match(html, /\.th-run\.mine \{ justify-content:flex-end; \}/);
@@ -444,7 +442,7 @@ test("conversation chunks carry the selected Relay date divider", () => {
   assert.equal(chatChunkDateLabel(nextChunk, first, now), "Today", "a pause over six hours starts a labelled chunk");
 
   assert.match(html, /class="th-chunk-date\$\{firstChunk \? " first" : ""\}" data-chat-key="\$\{esc\(renderKey\)\}:date" role="separator"/);
-  assert.match(html, /return `\$\{slackThreadContextHtml\(m\)\}\$\{chunkDivider\}\$\{runHeader\}/);
+  assert.match(html, /return `\$\{chunkDivider\}\$\{runHeader\}/);
   assert.doesNotMatch(html, /\.th-run\.th-seam|\.th-msg\.gap-mid|\.th-run\.gap-mid/);
 });
 
@@ -510,13 +508,13 @@ test("a dated chunk reintroduces the sender even inside the same wire thread", (
 
 test("a room send addresses the room and quotes only a chosen Relay", () => {
   assert.match(html, /const selectedReplyTargetId = String\(threadReplyTargets\.get\(threadStateKey\) \|\| ""\)/);
-  assert.match(html, /const inReplyToRelayId = \(selectedReplyTarget\?\.slackTeammateReply \? String\(selectedReplyTarget\.inReplyToRelayId \|\| ""\) : selectedReplyTargetId\)\n\s+\|\| String\(focusedSlackParent\?\.id \|\| ""\)/);
+  assert.match(html, /const inReplyToRelayId = selectedReplyTargetId \|\| String\(focusedReplyRoot\?\.id \|\| ""\);/);
   // A group room speaks to the group; only a reply to a message outside the
   // group follows its parent. Other rooms inherit their newest address.
   assert.match(html, /const recipient = \(groupSend && roomGroup\)\n\s+\|\| \(parentOutsideGroup && replyParent\.addressRecipient\)\n\s+\|\| \(addressAnchor && addressAnchor\.addressRecipient\)/);
-  assert.match(html, /if \(!room \|\| !room\.isGroup \|\| isSlackIntegratedRoom\(room\)\) return null;\n\s+return room\.groupId \? \{ groupId:String\(room\.groupId\) \} : null;/);
-  assert.match(html, /emptyRoomAnchor\.provider === "slack"[\s\S]*\? \{ chatId:emptyRoomAnchor\.chatId \}[\s\S]*: \{ groupId:emptyRoomAnchor\.groupId \}/,
-    "an exact Slack direct or channel addresses its chat while Relay groups retain their group recipient");
+  assert.match(html, /if \(!room \|\| !room\.isGroup\) return null;\n\s+return room\.groupId \? \{ groupId:String\(room\.groupId\) \} : null;/);
+  assert.match(html, /emptyRoomAnchor\.addressRecipient \|\| \{ groupId:emptyRoomAnchor\.groupId \}/,
+    "Relay groups retain their group recipient");
   assert.match(html, /sendReply\(\{\s*text, recipient, \.\.\.\(inReplyToRelayId \? \{ inReplyToRelayId, \.\.\.\(replyKind \? \{ replyKind \} : \{\}\) \} : \{\}\), files, idempotencyKey,/);
   assert.doesNotMatch(html, /sendReply\(\{ text, inReplyToRelayId: newest\.id/);
 });
@@ -556,12 +554,10 @@ test("specific replies use an attached composer preview and render a source refe
   assert.match(html, /margin:0 42px 5px 0/);
 });
 
-test("a bubble wears no provenance line at all: no 'Sent with', no 'From Slack'", () => {
+test("a bubble wears no provenance line at all: no 'Sent with'", () => {
   // The "Sent with Codex / Claude Code" line went on 2026-09-17 (David): its
   // height became the bar's marks, and which agent wrote a letter is the
-  // letter's business. The "From Slack" band went on 2026-10-07 (David):
-  // where a text was typed does not matter; a chat that is also in Slack says
-  // so once, beside its name. Executed, not pattern-matched.
+  // letter's business. Executed, not pattern-matched.
   assert.doesNotMatch(html, /PROVIDER_BYLINE|Sent with \$\{esc\(provider\.label\)\}/);
   const start = html.indexOf("const providerBylineHtml = ");
   assert.notEqual(start, -1, "the byline moved — this test extracts it by name");
@@ -572,9 +568,6 @@ test("a bubble wears no provenance line at all: no 'Sent with', no 'From Slack'"
     assert.equal(providerBylineHtml({ source: { host: "relay-mcp", surface } }), "", `no byline for ${surface}`);
   }
   assert.equal(providerBylineHtml({}), "");
-  assert.equal(providerBylineHtml({ origin: "slack" }), "", "a message typed in Slack wears no label");
-  assert.equal(providerBylineHtml({ provider: { name: "slack" } }), "");
-  assert.doesNotMatch(html, />From Slack</);
 });
 
 test("the provenance byline is not confined to rows without an agent document", () => {
@@ -589,7 +582,7 @@ test("the provenance byline is not confined to rows without an agent document", 
 
 test("the room composer prevents duplicate sends, and returns a draft only when the device itself refuses it", () => {
   assert.match(html, /let thReplySending = false;/);
-  assert.match(html, /const threadStateKey = `\$\{isConversationRoomSource\(\) \? String\(threadDetailId\) : String\(thread\.threadId\)\}\$\{slackFocusedThreadId \? `\|slack-thread:\$\{slackFocusedThreadId\}` : ""\}\$\{focusedReplyRoot \? `\|reply-thread:\$\{replyThreadFocusId\}` : ""\}`/);
+  assert.match(html, /const threadStateKey = `\$\{isConversationRoomSource\(\) \? String\(threadDetailId\) : String\(thread\.threadId\)\}\$\{focusedReplyRoot \? `\|reply-thread:\$\{replyThreadFocusId\}` : ""\}`/);
   assert.match(html, /if \(thReplySending \|\| chatReplySending\.has\(threadStateKey\)\) return;/);
   assert.match(html, /thQrSend\.disabled = true;/);
   assert.match(html, /chatReplySending\.add\(threadStateKey\)/);
@@ -753,7 +746,7 @@ test("canonical chat hydration preserves the immediate owned-agent card species"
   assert.equal(message.textLike, true, "an empty loading response keeps the compact agent bubble species");
   assert.deepEqual(message.source, item.source, "the Codex byline and card colour keep their provider source");
   assert.match(html, /const ownedAgent = item\.source\?\.host === "relay-agent-run";[\s\S]*?source: item\.source \|\| null,[\s\S]*?ownedAgent,/,
-    "canonical Slack projections preserve the same agent identity too");
+    "canonical chat projections preserve the same agent identity too");
 });
 
 test("progress-only Relay edits repaint an already-open desktop chat", () => {

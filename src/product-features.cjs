@@ -52,9 +52,6 @@ function productFeatures(options = {}) {
     // One server-owned switch for every deployment; off whenever the server's
     // answer has not been heard, so an older API keeps today's setup code.
     chatGptApp: user?.accountKind === "human" && user?.chatGptApp === true,
-    // Google Contacts sync is still under Dev validation, so it follows the
-    // same server-owned developer-account gate as the other unreleased tools.
-    googleContacts: developer,
     // Tasks are the shipped product on every deployment and for every account
     // (David, 2026-09-17). The server enforces the same rule: any personal
     // account may send, receive and act on a Task, on dev, staging and
@@ -80,10 +77,6 @@ function productFeatures(options = {}) {
     // Shane and Sven, 2026-10-08). Released to every account on every
     // deployment (David, 2026-10-10).
     fullAppExpand: true,
-    // The Inbox as two pages, Chats and Relays and Tasks, moved by two
-    // fingers, with a peek that teaches the swipe (David, 2026-10-09).
-    // Released to every account on every deployment (David, 2026-10-10).
-    inboxPages: true,
     // The pre-Requests task protocol (/v1/tasks, the agent inbox, task
     // sessions) the daemon polls and relay_task_create drives. Its routes
     // stay behind the developer gate on the server.
@@ -91,9 +84,6 @@ function productFeatures(options = {}) {
     // Topics (invite-only boards kept in sync by members' agents under an
     // approved mandate) are being proven by the developers first.
     topics: developer,
-    // Slack is an internal proving surface alongside Tasks. Staging and
-    // production exercise the customer product, even for developer accounts.
-    slack: developer,
     // Human mentions are ordinary conversation affordances. Agent mentions
     // start local runs, so they retain the same boundary as Tasks.
     peopleMentions: true,

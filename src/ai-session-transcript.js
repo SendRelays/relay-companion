@@ -327,6 +327,8 @@ function publicAgent(agent) {
 /** Inspect one user-owned native Claude Code or Codex AI session. */
 export async function inspectAiSession(target, input = {}) {
   const action = String(input.action || "read");
+  // An action a newer API adds is refused, never quietly read as "read".
+  if (!["read", "search", "agents"].includes(action)) throw new Error(`This version of Relay cannot "${action.slice(0, 60)}" an AI session yet (unsupported_operation_kind). Update Relay on this computer.`);
   const agents = sessionAgents(target);
   if (action === "agents") {
     return { aiSessionId: target.id, provider: target.provider, agents: agents.map(publicAgent) };

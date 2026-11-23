@@ -88,15 +88,15 @@ const { execFile, execFileSync, spawn, pathToFileURL } = (() => {
   return { execFile: cp.execFile, execFileSync: cp.execFileSync, spawn: cp.spawn, pathToFileURL: url.pathToFileURL };
 })();
 
-// Slack buttons can only open HTTPS URLs. Relay's web bridge hands that click
-// to this narrow custom protocol, which carries an opaque message id and the
-// explicitly named host — never message content or credentials.
+// Relay's web bridge hands an open click to this narrow custom protocol, which
+// carries an opaque message id and the explicitly named host — never message
+// content or credentials.
 const pendingRelayDeepLinks = [];
 const pendingDesktopIntents = [];
 let relayDeepLinksReady = false;
-// One click in Slack can reach the pill twice: the browser's relay:// link
-// (when that browser is signed in to Relay) and the server's word that this
-// account clicked. Whichever lands first opens it; the other is the same click.
+// One click can reach the pill twice (a browser retry, or a second-instance
+// handoff racing open-url). Whichever lands first opens it; the other is the
+// same click.
 const RELAY_OPEN_DEDUPE_MS = 15_000;
 const recentRelayOpens = new Map();
 function freshRelayOpen(parsed) {
@@ -125,7 +125,6 @@ function queueRelayDeepLink(parsed) {
     ...(parsed.chatId ? { chatId: parsed.chatId } : {}),
     ...(parsed.handoffId ? { handoffId: parsed.handoffId } : {}),
     ...(parsed.ackOrigin ? { ackOrigin: parsed.ackOrigin } : {}),
-    ...(parsed.viaSlack ? { viaSlack: true } : {}),
   });
   if (relayDeepLinksReady) drainRelayDeepLinks();
   return true;
@@ -175,6 +174,7 @@ const {
   boundedPresentedRelayIds,
   recoverInterruptedAttentionPrefs,
   restoredDismissSnooze,
+  overlayPrefsNotOwned,
   quitRelayCommand,
   hostPollDelayMs,
   sentRefreshDelayMs,
@@ -329,9 +329,16 @@ function syncViewTelemetryAway() {
   viewTelemetry.away(systemSuspended || screenLocked, currentAppView());
 }
 let overlayPrefs = {};
+// Whether the prefs file has been read. A missing file or a corrupt one
+// counts as read (there is nothing to keep); a file that exists but could not
+// be read just now (locked by antivirus or a sync tool) does not, and nothing
+// is written over it until it has been (see writeOverlayPrefs).
+let overlayPrefsRead = true;
 try {
   overlayPrefs = JSON.parse(fs.readFileSync(OVERLAY_PREFS_PATH, "utf8")) || {};
-} catch {}
+} catch (error) {
+  if (error && error.code && error.code !== "ENOENT") overlayPrefsRead = false;
+}
 const recoveredAttentionPrefs = recoverInterruptedAttentionPrefs(overlayPrefs);
 overlayPrefs = recoveredAttentionPrefs.prefs;
 let dismissed = overlayPrefs.dismissed === true;
@@ -361,7 +368,9 @@ try {
   if (typeof settingsStoreCache.soundsMuted === "boolean") soundsMuted = settingsStoreCache.soundsMuted;
   else seed.soundsMuted = soundsMuted;
   if (NOTIFY_STYLES.has(settingsStoreCache.notifyStyle)) notifyStyle = settingsStoreCache.notifyStyle;
-  else seed.notifyStyle = notifyStyle;
+  // A style a newer pill saved is left in the file, never overwritten with
+  // this pill's default; this pill just shows its own default meanwhile.
+  else if (settingsStoreCache.notifyStyle === undefined) seed.notifyStyle = notifyStyle;
   if (Object.keys(seed).length) settingsStoreCache = relaySettings.patchDevice(seed);
 } catch (error) {
   console.error("[overlay] settings store unavailable:", error && error.message);
@@ -545,12 +554,34 @@ function trayStatus() {
   };
 }
 
+// Keys this version does not own (written by a newer pill, then rolled back)
+// are carried over on every write; see OWNED_OVERLAY_PREF_KEYS in visibility.cjs.
+let foreignPrefs = null;
+function prefsNotOwnedHere() {
+  if (foreignPrefs) return foreignPrefs;
+  let source = overlayPrefs;
+  if (!overlayPrefsRead) {
+    try {
+      source = JSON.parse(fs.readFileSync(OVERLAY_PREFS_PATH, "utf8")) || {};
+    } catch (error) {
+      if (error && error.code && error.code !== "ENOENT") return null;
+      source = {};
+    }
+    overlayPrefsRead = true;
+  }
+  foreignPrefs = overlayPrefsNotOwned(source);
+  return foreignPrefs;
+}
+
 function writeOverlayPrefs() {
   try {
-    // This literal is a WHITELIST, not a merge: the file is rebuilt from it on every
-    // write, so a key omitted here is erased within seconds. Any new durable pref
-    // must be listed.
+    const foreign = prefsNotOwnedHere();
+    if (!foreign) {
+      console.error(`[overlay] ${new Date().toISOString()} prefs write deferred: the file could not be read yet`);
+      return;
+    }
     const prefs = attention.saveQueue(attentionQueue, {
+      ...foreign,
       dismissed,
       attentionLatched,
       pillHidden,
@@ -859,7 +890,7 @@ function installationAuthorizationController() {
           leaveSetupPlacement();
           try {
             await restartCompanionDaemon();
-            await Promise.allSettled([refreshSent(), refreshContacts(), refreshCanonicalChats()]);
+            await Promise.allSettled([refreshSent(), refreshContacts()]);
           } finally {
             // Only a confirmed empty history opens the first-send chapter. A
             // history with sends, or one that could not be checked, keeps the
@@ -1011,20 +1042,12 @@ async function openRelayDeepLink(parsed) {
     loadPlainStager(),
   ]);
   // Open Relay (and Conductor, which starts from the Relay the pill opens):
-  // the Relay itself, in the pill, from a Slack card.
-  // A Slack card click claimed from the server (any host) is a chat message:
-  // open it from its chat, then hand it to the app the person picked.
-  if (parsed.host === "relay" || parsed.host === "conductor" || parsed.viaSlack) {
+  // the Relay itself, in the pill, opened from its chat.
+  if (parsed.host === "relay" || parsed.host === "conductor") {
     const client = new RelayClient();
-    await refreshCanonicalChats();
-    const chatId = String(
-      parsed.chatId
-      || [...canonicalChatsCache, ...slackChatsCache]
-        .find((chat) => chat?.lastMessage?.relayId === parsed.messageId)?.chatId
-      || "",
-    );
+    const chatId = String(parsed.chatId || "");
     if (!chatId) throw new Error("Relay channel context is unavailable to this account.");
-    const chat = await client.chat(chatId, { surface: "slack", includeSlack: true });
+    const chat = await client.chat(chatId);
     if (!Array.isArray(chat?.items) || !chat.items.some((item) => item?.relayId === parsed.messageId)) {
       throw new Error("Relay message is unavailable to this account.");
     }
@@ -1420,11 +1443,6 @@ function resetAccountViewCaches() {
   contactsCache = [];
   contactsFingerprint = "";
   contactsLoadedOnce = null;
-  canonicalChatsCache = [];
-  slackChatsCache = [];
-  slackTeammateRepliesCache = [];
-  canonicalChatsFingerprint = "";
-  canonicalChatsLoadedOnce = null;
   tasksCache = [];
   reactionCache = new Map();
   reactionFetchSig = "";
@@ -1537,9 +1555,7 @@ async function refreshAccountProductFeatures() {
     const credentialRecovered = remoteCredentialRejected;
     remoteCredentialRejected = false;
     if (result.changed || credentialRecovered) {
-      canonicalChatsLoadedOnce = null;
       await refreshTasks();
-      await refreshCanonicalChats();
       await pushInbox(true);
     }
     return result.changed;
@@ -1887,12 +1903,6 @@ function matchingWebOrigin() {
   const api = process.env.RELAY_API_URL || readConfigFile().apiUrl || "";
   try { if (new URL(api).hostname === "dev-api.sendrelays.com") return "https://dev.sendrelays.com"; } catch {}
   return webBase();
-}
-
-function googleContactsWebUrl(userId) {
-  const url = new URL("/app/contacts/google", matchingWebOrigin());
-  url.searchParams.set("account", userId);
-  return url.toString();
 }
 
 function accountSettingsPath(user = {}) {
@@ -2516,10 +2526,9 @@ function ensureSentLoaded() {
 let sentLiveWake = null;
 let sentLiveWakeToken = "";
 // After sleep or a locked screen the held account-change request can be a dead
-// socket the pill waits out (David's Open in Claude Code from Slack, 2026-10-09:
-// clicked a minute after waking, claimed four minutes later, long expired).
-// Dropping it lets the 2 s reconcile reopen it at once, and reopening claims
-// any Slack card click that is waiting.
+// socket the pill waits out (2026-10-09: a change a minute after waking was
+// seen four minutes later, long expired). Dropping it lets the 2 s reconcile
+// reopen it at once.
 function restartSentLiveWake() {
   if (sentLiveWake) { sentLiveWake.stop(); sentLiveWake = null; }
   sentLiveWakeToken = "";
@@ -2539,24 +2548,9 @@ function startSentLiveWakeForAccount() {
     }
     if (deviceToken() !== token) { sentLiveWakeToken = ""; return; }
     if (typeof client.waitForAccountChange !== "function") return;
-    // Open Relay clicked in Slack by this account: the server wakes this
-    // cursor, and the pill opens the Relay whatever browser Slack used.
-    const claimSlackOpens = () => {
-      if (currentProductFeatures().slack !== true || typeof client.claimSlackOpenRequests !== "function") return;
-      client.claimSlackOpenRequests()
-        .then((body) => {
-          for (const request of Array.isArray(body?.requests) ? body.requests : []) {
-            if (!request?.messageId || !["relay", "conductor", "claude", "codex", "claude-app", "chatgpt"].includes(request.host)) continue;
-            queueRelayDeepLink({ messageId: String(request.messageId), host: request.host, viaSlack: true, ...(request.chatId ? { chatId: String(request.chatId) } : {}) });
-          }
-        })
-        .catch((error) => console.error("[overlay] Slack open requests unavailable:", error && error.message));
-    };
-    claimSlackOpens();
     sentLiveWake = startSentLiveWake({
       wait: (since, signal) => client.waitForAccountChange(since, signal),
       onChange: async () => {
-        claimSlackOpens();
         // refreshSent() logs its own failures and returns the old cache; the
         // commit counter is what proves the server answered. An unanswered
         // wake keeps its cursor so the change is asked for again.
@@ -2672,74 +2666,6 @@ async function refreshTasks() {
   }
   return tasksCache;
 }
-// Slack-backed channels are canonical chats, not legacy inbox fan-out rows.
-// Keep their compact summaries beside the other network-backed caches so the
-// Pill still paints instantly offline and refreshes them without blocking its
-// local packet-store path.
-let canonicalChatsCache = [];
-let slackChatsCache = [];
-// Replies Slack teammates (not on Relay yet) typed in Slack under your Relays.
-let slackTeammateRepliesCache = [];
-let canonicalChatsLoadedOnce = null;
-let canonicalChatsFingerprint = "";
-function canonicalChatsFingerprintOf(relayList, slackList) {
-  const rows = (list) => (list || []).map((chat) => [
-    chat.chatId, chat.updatedAt, chat.messageCount, chat.unreadCount,
-    chat.lastMessage && chat.lastMessage.relayId,
-  ]);
-  return JSON.stringify({ relay: rows(relayList), slack: rows(slackList) });
-}
-function isSlackLinkedChat(chat) {
-  return Boolean(chat && (
-    chat.integration?.provider === "slack"
-    // Compatibility with servers released before direct Slack bindings moved
-    // to `integration`; this branch covers their channel-only summaries.
-    || chat.channel?.slack
-  ));
-}
-async function refreshCanonicalChats() {
-  if (currentProductFeatures().slack !== true) {
-    canonicalChatsCache = [];
-    slackChatsCache = [];
-    slackTeammateRepliesCache = [];
-    canonicalChatsFingerprint = canonicalChatsFingerprintOf([], []);
-    return { relay: canonicalChatsCache, slack: slackChatsCache };
-  }
-  const credential = deviceToken();
-  if (!credential) return { relay: canonicalChatsCache, slack: slackChatsCache };
-  try {
-    const client = await relayClient();
-    const [relayResult, slackResult, repliesResult] = await Promise.allSettled([
-      client.chats({ surface: "relay" }),
-      client.chats({ surface: "slack" }),
-      client.slackTeammateReplies(),
-    ]);
-    if (deviceToken() !== credential) return { relay: canonicalChatsCache, slack: slackChatsCache };
-    if (relayResult.status === "fulfilled") {
-      canonicalChatsCache = (Array.isArray(relayResult.value?.chats) ? relayResult.value.chats : [])
-        .filter(isSlackLinkedChat);
-    }
-    if (slackResult.status === "fulfilled") {
-      slackChatsCache = (Array.isArray(slackResult.value?.chats) ? slackResult.value.chats : [])
-        .filter(isSlackLinkedChat);
-    }
-    if (repliesResult.status === "fulfilled") {
-      slackTeammateRepliesCache = Array.isArray(repliesResult.value?.replies) ? repliesResult.value.replies : [];
-    }
-    if (relayResult.status === "rejected" && slackResult.status === "rejected") {
-      throw relayResult.reason;
-    }
-    canonicalChatsFingerprint = canonicalChatsFingerprintOf(canonicalChatsCache, slackChatsCache)
-      + JSON.stringify(slackTeammateRepliesCache.map((reply) => [reply.id, reply.unread]));
-  } catch (error) {
-    console.error("[overlay] canonical chats refresh failed:", error && error.message);
-  }
-  return { relay: canonicalChatsCache, slack: slackChatsCache };
-}
-function ensureCanonicalChatsLoaded() {
-  if (!canonicalChatsLoadedOnce) canonicalChatsLoadedOnce = refreshCanonicalChats().catch(() => canonicalChatsCache);
-  return canonicalChatsLoadedOnce;
-}
 
 // ---- contacts (cached; refreshed on a slow interval + on demand) ----------
 // Contacts must NEVER be fetched per state push: a slow or failing network would
@@ -2751,7 +2677,7 @@ let contactsLoadedOnce = null;
 let contactsFingerprint = "";
 function contactsFingerprintOf(list) {
   // Include identity/link status: a formerly offline contact can become blockable.
-  return JSON.stringify((list || []).map((c) => [c.id, c.name, c.email, c.relayUserId, c.onRelay, c.source, c.slack?.invitedAt || null]));
+  return JSON.stringify((list || []).map((c) => [c.id, c.name, c.email, c.relayUserId, c.onRelay, c.source]));
 }
 async function refreshContacts() {
   const contactFixtures = testFixtures("RELAY_OVERLAY_TEST_CONTACTS_FIXTURES");
@@ -2795,12 +2721,6 @@ function contactBookRow(c) {
     onRelay: Boolean(c.onRelay),
     source: c.source || "",
     updatedAt: c.updatedAt || null,
-    // Someone you share Slack with: a Relay reaches them there until they join.
-    ...(c.slack && c.slack.slackUserId ? { slack: {
-      teamId: String(c.slack.teamId || ""),
-      slackUserId: String(c.slack.slackUserId),
-      invitedAt: c.slack.invitedAt || null,
-    } } : {}),
   };
 }
 function ensureContactsLoaded() {
@@ -2933,7 +2853,7 @@ function refreshAfterQueuedSend() {
   if (queuedSendRefreshTimer) return;
   queuedSendRefreshTimer = setTimeout(() => {
     queuedSendRefreshTimer = null;
-    Promise.allSettled([refreshSent(), refreshContacts(), refreshCanonicalChats()])
+    Promise.allSettled([refreshSent(), refreshContacts()])
       .then(() => pushInboxQuiet());
   }, 32);
   queuedSendRefreshTimer.unref?.();
@@ -2952,7 +2872,6 @@ function buildPayload() {
   // Kick the first loads without awaiting; each calls pushInbox(false) on completion.
   if (!sentLoadedOnce) ensureSentLoaded().then(() => pushInbox(false)).catch(() => {});
   if (!contactsLoadedOnce) ensureContactsLoaded().then(() => pushInbox(false)).catch(() => {});
-  if (!canonicalChatsLoadedOnce) ensureCanonicalChatsLoaded().then(() => pushInbox(false)).catch(() => {});
   const relaysNow = readRelays();
   const reactionIds = relaysNow.concat(sentCache).map((row) => row && (row.relayId || row.id)).filter(Boolean);
   const reactionSigNow = [...new Set(reactionIds.map(String).filter(Boolean))].slice(0, 200).sort().join("\n");
@@ -3050,9 +2969,6 @@ function buildPayload() {
     outboxRevision: outbox.revision(),
     tasks: [],
     contacts: contactsCache,
-    chats: canonicalChatsCache,
-    slackChats: slackChatsCache,
-    slackTeammateReplies: slackTeammateRepliesCache,
   };
 }
 
@@ -3546,15 +3462,6 @@ async function pushInboxNow(force) {
       reactionStateFingerprint(r.reactions),
     ]),
     contacts: payload.contacts.map((c) => [c.id, c.name, c.email, c.relayUserId, c.onRelay, c.source]),
-    chats: (payload.chats || []).map((chat) => [
-      chat.chatId, chat.updatedAt, chat.messageCount, chat.unreadCount,
-      chat.lastMessage && chat.lastMessage.relayId,
-    ]),
-    slackChats: (payload.slackChats || []).map((chat) => [
-      chat.chatId, chat.updatedAt, chat.messageCount, chat.unreadCount,
-      chat.lastMessage && chat.lastMessage.relayId,
-    ]),
-    slackTeammateReplies: (payload.slackTeammateReplies || []).map((reply) => [reply.id, reply.unread]),
     linkChats: linkChatsFingerprintOf(payload.linkChats),
     // Without these the queue's own progress — waiting, attempted again, sent,
     // refused — would never reach the renderer: nothing else in the payload
@@ -4813,7 +4720,7 @@ async function cachedPickerRail(provider, routing) {
 // A chat or channel message (msg_ id) lives on the server, not in this
 // device's received-packet store, so handing it to Claude Code or Codex found
 // no row ("That Relay is no longer available on this device": David, Open in
-// Claude Code from a Slack card, 2026-10-09). Stage it from the server the way
+// Claude Code, 2026-10-09). Stage it from the server the way
 // a remotely started session does (session-controller materializeRelayOperation),
 // as already read: opening it is not news.
 async function stageServerRelayForDelivery(id) {
@@ -5613,7 +5520,7 @@ async function resolveRelayAttachment(relayId, attachmentId) {
       }
     }
   }
-  // Canonical Slack-linked messages live in the normalized chat cache rather
+  // Canonical chat messages live in the normalized chat cache rather
   // than the legacy Sent list. Fetch their packet lazily and stage an invisible
   // outbound-shaped materialization row so attachment open/preview reuses the
   // exact same contained local-file pipeline as every deployed Relay.
@@ -5814,7 +5721,7 @@ async function previewRelayAttachment(relayId, attachmentId) {
 const VIEWER_WIN = { width: 760, height: 560, minWidth: 480, minHeight: 360 };
 // The viewer is a night object even when the pill is on paper: it is a stage.
 // The renderer still wears the pill's theme; this is only the pre-paint fill.
-const VIEWER_BACKGROUND = "#221E1B";
+const VIEWER_BACKGROUND = "#2A2521";
 const attachmentViewers = new Map();
 
 function liveAttachmentViewers() {
@@ -6319,6 +6226,14 @@ function followAgentOnboardingPlacement() {
 // visible card; the transparent remainder is made click-through below.
 function showOverlayWindow({ force = false, reposition = true, userInitiated = false } = {}) {
   if (!win || win.isDestroyed()) return;
+  // A minimised full app stays in the Dock or taskbar until the person brings
+  // it back. The periodic and display-change re-shows would otherwise restore
+  // it (showInactive), and on macOS, where a minimised window reads as not
+  // visible, shrink it to the pill's home first.
+  if (fullAppMinimized()) {
+    if (!userInitiated) return;
+    restoreMinimizedApp();
+  }
   const visible = win.isVisible();
   if (visible && !force) {
     perf.inc("spaceAsserts");
@@ -6546,6 +6461,7 @@ function enterAppSurface() {
     if (appSurface && bundle && !RELAY_BUNDLE_IDS.includes(bundle)) appSurface.returnBundle = bundle;
   });
   try { win.setAlwaysOnTop(false); } catch {}
+  try { win.setMinimizable(true); } catch {}
   overlayElevated = false;
   // An ordinary app lives on the Space it was opened on; the pill follows you
   // to every Space. skipTransformProcessType: the Dock icon is ours to show
@@ -6594,7 +6510,11 @@ function appSurfaceRefit() {
 function exitAppSurface({ reshowPill = true, handBack = true } = {}) {
   if (!appSurface || !win || win.isDestroyed()) { appSurface = null; return; }
   const { restore, returnBundle } = appSurface;
+  // Restore while still the full app, so the window comes back at its own size
+  // before it shrinks to the pill.
+  restoreMinimizedApp();
   appSurface = null;
+  try { win.setMinimizable(false); } catch {}
   try { win.webContents.send("relay:surfaceInset", { top: 0, right: 0 }); } catch {}
   try { win.setBounds(restore, false); } catch {}
   try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true }); } catch {}
@@ -6672,6 +6592,7 @@ function enterAppWindow() {
   // the full app must not be lifted back above the app the person chose.
   overlayElevated = false;
   try { win.setAlwaysOnTop(false); } catch {}
+  try { win.setMinimizable(true); } catch {}
   try { setCompanionAppWindow(win, true, { owner: pillOwner }); } catch {}
   try { win.focus(); } catch {}
   // The taskbar button is new, and an overlay set before it existed is lost.
@@ -6683,9 +6604,35 @@ function exitAppWindow() {
   appWindow = false;
   appWindowHome = null;
   if (!win || win.isDestroyed()) return;
+  restoreMinimizedApp();
+  try { win.setMinimizable(false); } catch {}
   try { setCompanionAppWindow(win, false, { owner: pillOwner }); } catch {}
   overlayElevated = true;
   if (pillTopmost) { try { win.setAlwaysOnTop(true, PILL_TOPMOST_LEVEL); } catch {} }
+}
+// MINIMISE IN THE FULL APP (Shane, 2026-11-20). The full app's − minimises it
+// like any other app's: to the Dock or the taskbar, still the full app, and
+// it comes back the same from there, the Dock icon or the menu-bar icon.
+// Folding to the pill is Collapse's job. The pill window is created
+// unminimisable (the folded pill is its minimised state), so the full app
+// turns minimising on while it lasts; on Windows that also lets a click on its
+// own taskbar button minimise it, as it does any app's.
+function inFullApp() {
+  return Boolean(appSurface || appWindow);
+}
+function fullAppMinimized() {
+  if (!win || win.isDestroyed()) return false;
+  try { return win.isMinimized(); } catch { return false; }
+}
+function restoreMinimizedApp() {
+  if (!fullAppMinimized()) return;
+  try { win.restore(); } catch {}
+}
+function minimizeFullApp() {
+  if (!inFullApp() || !win || win.isDestroyed()) return false;
+  try { win.setMinimizable(true); } catch {}
+  try { win.minimize(); } catch { return false; }
+  return true;
 }
 // Windows names a taskbar button after its application, not its window: an
 // unbranded one says "Electron" with Electron's atom. Give the pill Relay's
@@ -7074,15 +7021,6 @@ function createWindow() {
       })
       .catch(() => {});
   }, 60000); // slow contact refresh; the contacts view also refreshes on open
-  setInterval(() => {
-    const fingerprintBefore = canonicalChatsFingerprint;
-    refreshCanonicalChats()
-      .then(() => {
-        if (canonicalChatsFingerprint !== fingerprintBefore) return pushInbox(false);
-        perf.inc("canonicalChatsPushSkips");
-      })
-      .catch(() => {});
-  }, 15000);
   const hostLoop = () => {
     // Engaged: fresh frontmost capture for imminent clicks. Otherwise the
     // process-list read alone keeps hostRunning/click-routing state warm.
@@ -9175,6 +9113,7 @@ function requestAppExpand() {
   if (currentProductFeatures().fullAppExpand !== true) { pendingAppExpand = false; return false; }
   if (!pillReady || !win || win.isDestroyed()) { pendingAppExpand = true; return false; }
   pendingAppExpand = false;
+  restoreMinimizedApp();
   win.webContents.send("relay:expandApp");
   try { win.moveTop(); win.focus(); } catch {}
   if (process.platform === "darwin") { try { app.focus({ steal: true }); } catch {} }
@@ -9183,7 +9122,7 @@ function requestAppExpand() {
 
 // Whether the pill card is actually on screen right now.
 function pillIsOnScreen() {
-  return Boolean(win && !win.isDestroyed() && win.isVisible() && !dismissed);
+  return Boolean(win && !win.isDestroyed() && win.isVisible() && !win.isMinimized() && !dismissed);
 }
 
 // Tray-driven hide: the counterpart to showFromTray, so the menu-bar icon TOGGLES.
@@ -9650,25 +9589,17 @@ ipcMain.handle("relay:setChatTyping", (event, input) => {
 
 function canonicalChatIpcInput(input) {
   const value = input && typeof input === "object" ? input : { chatId: input };
-  const surface = value.surface === "slack" ? "slack" : "relay";
-  return {
-    chatId: String(value.chatId || "").trim(),
-    surface,
-    includeSlack: surface === "slack" || value.includeSlack === true,
-  };
+  return { chatId: String(value.chatId || "").trim() };
 }
 ipcMain.handle("relay:canonicalChat", async (event, input) => {
   if (win && !win.isDestroyed() && event && event.sender !== win.webContents) {
     return { ok: false, error: "Not the pill." };
   }
-  const { chatId: id, surface, includeSlack } = canonicalChatIpcInput(input);
+  const { chatId: id } = canonicalChatIpcInput(input);
   if (!id) return { ok: false, error: "Missing channel id." };
-  if (currentProductFeatures().slack !== true && (surface === "slack" || includeSlack)) {
-    return { ok: false, error: "Slack is available only to Relay developer accounts on dev." };
-  }
   try {
     const client = await relayClient();
-    const chat = await client.chat(id, { surface, includeSlack });
+    const chat = await client.chat(id);
     return { ok: true, chat };
   } catch (error) {
     return { ok: false, error: (error && error.message) || String(error) };
@@ -9692,19 +9623,15 @@ ipcMain.handle("relay:canonicalChatRead", async (event, input) => {
   if (win && !win.isDestroyed() && event && event.sender !== win.webContents) {
     return { ok: false, error: "Not the pill." };
   }
-  const { chatId: id, surface, includeSlack } = canonicalChatIpcInput(input);
+  const { chatId: id } = canonicalChatIpcInput(input);
   if (!id) return { ok: false, error: "Missing channel id." };
-  if (currentProductFeatures().slack !== true && (surface === "slack" || includeSlack)) {
-    return { ok: false, error: "Slack is available only to Relay developer accounts on dev." };
-  }
   if (!chatReadPresenceIsAvailable(win)) {
     deferChatRead();
     return { ok: false, deferred: true };
   }
   try {
     const client = await relayClient();
-    const result = await client.markChatRead(id, `pill-chat-read-${surface}-${id}-${Date.now()}`, surface, { includeSlack });
-    await refreshCanonicalChats();
+    const result = await client.markChatRead(id, `pill-chat-read-relay-${id}-${Date.now()}`);
     await pushInbox(true);
     return result;
   } catch (error) {
@@ -10300,15 +10227,6 @@ async function postQueuedRelay(entry) {
   outgoingAttachmentCache.retain(entry, prepared);
   const explicit = entry.recipient || {};
   const hasRecipient = explicit.email || explicit.contactId || explicit.relayUserId || explicit.groupId || explicit.chatId;
-  if (explicit.chatId && entry.chat && entry.chat.provider === "slack") {
-    const result = await client.sendChatMessage(String(explicit.chatId), {
-      forHuman: text || " ",
-      attachments: prepared,
-      ...(entry.inReplyToRelayId ? { inReplyToMessageId: String(entry.inReplyToRelayId) } : {}),
-      idempotencyKey: entry.idempotencyKey,
-    });
-    return result;
-  }
   const result = await client.sendRelay({
     recipient: hasRecipient ? explicit : {},
     kind: "message",
@@ -10425,23 +10343,6 @@ function withConductorCapability(surfaces) {
   return { ...surfaces, Conductor: conductorCapability() };
 }
 ipcMain.handle("relay:contacts", () => readContacts());
-const googleContactsUnavailable = () => ({ ok: false, error: "Google contacts are available only in Relay Dev." });
-ipcMain.handle("relay:googleContactsStatus", () => currentProductFeatures().googleContacts === true
-  ? groupCall((c) => c.googleContactsStatus())
-  : googleContactsUnavailable());
-ipcMain.handle("relay:googleContactsSync", async () => {
-  if (currentProductFeatures().googleContacts !== true) return googleContactsUnavailable();
-  const result = await groupCall((c) => c.syncGoogleContacts());
-  if (result.ok) { await refreshContacts(); pushInbox(false); }
-  return result;
-});
-ipcMain.handle("relay:googleContactsConnect", async () => {
-  if (currentProductFeatures().googleContacts !== true) return googleContactsUnavailable();
-  const userId = account().userId;
-  if (!userId) return { ok: false, error: "Sign into Relay before connecting Google." };
-  await shell.openExternal(googleContactsWebUrl(userId));
-  return { ok: true };
-});
 
 ipcMain.handle("relay:contactSave", (_e, input) => saveContact(input));
 ipcMain.handle("relay:contactDelete", (_e, input) => deleteContactFromBook(input));
@@ -10576,78 +10477,6 @@ ipcMain.handle("relay:topicPostReply", async (_e, id, postId, input) => {
 
 // Settings tab: account card + the sign-out / switch-account lifecycle.
 ipcMain.handle("relay:accountInfo", () => accountInfo());
-ipcMain.handle("relay:slackConnection", async () => {
-  if (currentProductFeatures().slack !== true) {
-    return { ok: false, error: "Slack is available only to Relay developer accounts on dev." };
-  }
-  try { return { ok: true, connection: await (await relayClient()).slackConnection() }; }
-  catch (error) { return { ok: false, error: (error && error.message) || String(error) }; }
-});
-// Slack approval happens in the browser. The pill does not make the person
-// come back and check: main watches the connection itself, pulls the new
-// chats the moment Slack says yes, and brings Relay forward to show them.
-const SLACK_WATCH_INTERVAL_MS = 1500;
-const SLACK_WATCH_LIMIT_MS = 10 * 60 * 1000;
-let slackConnectWatch = null;
-function slackConnectionIsReady(connection) {
-  return connection?.state === "connected"
-    && connection?.team?.connected === true
-    && connection?.personal?.state === "connected";
-}
-function stopSlackConnectWatch() {
-  if (slackConnectWatch?.timer) clearTimeout(slackConnectWatch.timer);
-  slackConnectWatch = null;
-}
-function watchSlackConnect() {
-  stopSlackConnectWatch();
-  const watch = { startedAt: Date.now(), timer: null };
-  slackConnectWatch = watch;
-  const tick = async () => {
-    if (slackConnectWatch !== watch) return;
-    if (Date.now() - watch.startedAt > SLACK_WATCH_LIMIT_MS) { stopSlackConnectWatch(); return; }
-    let connection = null;
-    try { connection = await (await relayClient()).slackConnection(); } catch {}
-    if (slackConnectWatch !== watch) return;
-    if (slackConnectionIsReady(connection)) {
-      stopSlackConnectWatch();
-      try { await refreshCanonicalChats(); } catch {}
-      try { await pushInbox(true); } catch {}
-      if (win && !win.isDestroyed()) {
-        showFromTray();
-        try { win.focus(); } catch {}
-        win.webContents.send("slackConnection", { connection, connected: true });
-      }
-      // Channels can keep arriving for a few seconds after the approval while
-      // Slack lists them; one more pull catches the stragglers.
-      setTimeout(() => { refreshCanonicalChats().then(() => pushInbox(true)).catch(() => {}); }, 4000);
-      return;
-    }
-    watch.timer = setTimeout(tick, SLACK_WATCH_INTERVAL_MS);
-  };
-  watch.timer = setTimeout(tick, SLACK_WATCH_INTERVAL_MS);
-}
-ipcMain.handle("relay:slackConnect", async (_event, input = {}) => {
-  if (currentProductFeatures().slack !== true) {
-    return { ok: false, error: "Slack is available only to Relay developer accounts on dev." };
-  }
-  try {
-    const client = await relayClient();
-    const result = input?.reconnect
-      ? await client.reconnectSlack({ returnSurface: "app" })
-      : await client.startSlackConnection({
-        mode: input?.mode === "user" ? "user" : "combined",
-        returnSurface: "app",
-        ...(input?.expectedTeamId ? { expectedTeamId: String(input.expectedTeamId) } : {}),
-      });
-    if (!result?.authorizationUrl) throw new Error("Slack did not return an approval URL.");
-    await shell.openExternal(result.authorizationUrl);
-    watchSlackConnect();
-    return { ok: true, waiting: true };
-  } catch (error) {
-    return { ok: false, error: slackConnectErrorText(error) };
-  }
-});
-ipcMain.handle("relay:slackConnectCancel", () => { stopSlackConnectWatch(); return { ok: true }; });
 // An email sign-up has no name, and the first Relay link needs one: the pill
 // asks once, the account takes it, and this computer's copy of the account
 // follows so every screen greets them by it.
@@ -10665,60 +10494,6 @@ ipcMain.handle("relay:setAccountName", async (event, input = {}) => {
   } catch (error) {
     return { ok: false, error: String(error?.body?.message || "Relay couldn’t save your name. Try again.") };
   }
-});
-ipcMain.handle("relay:slackContactInvite", async (event, input = {}) => {
-  if (win && !win.isDestroyed() && event && event.sender !== win.webContents) return { ok: false, error: "Not the pill." };
-  if (currentProductFeatures().slack !== true) return { ok: false, error: "Slack isn’t available here." };
-  try {
-    const result = await (await relayClient()).inviteSlackContacts(input?.contactId ? String(input.contactId) : "");
-    const contacts = await refreshContacts();
-    return { ok: true, invited: Number(result?.invited || 0), contacts };
-  } catch (error) {
-    const code = String(error?.body?.error || error?.code || "");
-    return {
-      ok: false,
-      code,
-      error: code === "slack_authorization_required"
-        ? "Connect your Slack to invite teammates."
-        : String(error?.body?.message || "Couldn’t send the invitation. Try again."),
-    };
-  }
-});
-ipcMain.handle("relay:slackInvite", async (event, input = {}) => {
-  if (win && !win.isDestroyed() && event && event.sender !== win.webContents) return { ok: false, error: "Not the pill." };
-  if (currentProductFeatures().slack !== true) return { ok: false, error: "Slack isn’t available here." };
-  const chatId = String(input?.chatId || "").trim();
-  if (!chatId) return { ok: false, error: "Missing chat." };
-  try {
-    const result = await (await relayClient()).inviteSlackTeammates(chatId, input?.slackUserId ? String(input.slackUserId) : "");
-    // The group's roster now carries the invitation.
-    refreshCanonicalChats().then(() => pushInbox(true)).catch(() => {});
-    return { ok: true, result };
-  } catch (error) {
-    const code = String(error?.body?.error || error?.code || "");
-    return {
-      ok: false,
-      code,
-      error: code === "slack_authorization_required"
-        ? "Connect your Slack to invite teammates."
-        : String(error?.body?.message || "Couldn’t send the invitation. Try again."),
-    };
-  }
-});
-// Words a person can act on, not the server's error codes.
-function slackConnectErrorText(error) {
-  const code = String(error?.code || error?.body?.error || "");
-  const message = String(error?.message || "");
-  if (code === "slack_not_configured" || /not configured/i.test(message)) return "Slack isn’t available yet. Try again later.";
-  if (/network|fetch|ENOTFOUND|ECONN|timed? ?out/i.test(message)) return "Couldn’t reach Relay. Check your internet and try again.";
-  return "Couldn’t open Slack. Try again.";
-}
-ipcMain.handle("relay:slackDisconnect", async () => {
-  if (currentProductFeatures().slack !== true) {
-    return { ok: false, error: "Slack is available only to Relay developer accounts on dev." };
-  }
-  try { return { ok: true, result: await (await relayClient()).disconnectSlack() }; }
-  catch (error) { return { ok: false, error: (error && error.message) || String(error) }; }
 });
 ipcMain.handle("relay:credentialRetry", async () => {
   nativeCredentialCache = { version: null, token: "" };
@@ -11159,6 +10934,12 @@ ipcMain.handle("relay:adoptLegacySettings", (_event, legacy) => {
   }
 });
 
+// The full app's − (inbox.html). False when the card is not the full app, so
+// the renderer folds to the pill as before.
+ipcMain.handle("relay:minimizeApp", (event) => {
+  if (!win || win.isDestroyed() || event.sender !== win.webContents) return false;
+  return minimizeFullApp();
+});
 ipcMain.on("relay:engage", (event) => {
   if (!win || win.isDestroyed() || event.sender !== win.webContents) return;
   lastEngagedAt = Date.now();

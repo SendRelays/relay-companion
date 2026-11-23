@@ -18,7 +18,7 @@ try {
    text('stale-one','sent twenty minutes ago, past the edit window',ago(20*60*1000)),
    text('edit-me','but its task is, when a new relay comes in, create a new claude session for that relay',ago(60*1000)),
   ];
-  const payload={account:{paired:true,userId:'self',name:'David',email:'david@example.com',hasSentRelay:true},ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1},features:{messageMutations:true},relays:[],sent,requests:[],chats:[],slackChats:[]};
+  const payload={account:{paired:true,userId:'self',name:'David',email:'david@example.com',hasSentRelay:true},ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1},features:{messageMutations:true},relays:[],sent,requests:[],chats:[]};
   window.writes=[];window.deletes=[];window.failEdit=false;
   const api={isTestOverlay:true,refresh:async()=>payload,refreshSent:async()=>({items:sent}),contacts:async()=>[],groups:async()=>({ok:true,result:[]}),accountInfo:async()=>payload.account,agentSurfaces:async()=>({}),
    editMessage:async(id,forHuman,updatedAt)=>{window.writes.push({id,forHuman,updatedAt});if(window.failEdit)return{ok:false,error:'Couldn’t save. Try again.'};const editedAt=new Date().toISOString();const row=sent.find(s=>s.relayId===id);row.forHuman=forHuman;row.editedAt=editedAt;return{ok:true,relayId:id,forHuman,editedAt,updatedAt:editedAt}},

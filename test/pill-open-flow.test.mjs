@@ -529,7 +529,7 @@ test("settling an arrival clears the notifying marker on every path", () => {
   assert.match(sliceFunction(html, "function foldToPill()"), /classList\.remove\("peek", "notifying"\)/);
 });
 
-// Slack-style run grouping is right for chat utterances and wrong for these:
+// Chat-style run grouping is right for chat utterances and wrong for these:
 // every row is a whole relay with its own title, actions and moment in time.
 // Two relays from one sender collapsed into a single headerless block with one
 // timestamp, and David could not tell there were two.

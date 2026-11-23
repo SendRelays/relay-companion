@@ -27,9 +27,8 @@ test("a relay tap lands in the glance frame; only Chat-sourced opens earn the sp
   // see the message." Compact by default, ⤢ Expand opt-in; David's law for
   // Chat rooms untouched (openRoom asserts it; options.expanded still wins).
   const open = html.slice(html.indexOf("function openThreadDetail("), html.indexOf("// ---------- Settings view"));
-  // A Slack-linked room reads its Slack projection whichever list opened it,
-  // so the split is earned by the list it came from, not the projection.
-  assert.match(open, /const returnSource = source === "slack" \? "relays" : source;/);
+  // The split is earned by the list the room came from.
+  assert.match(open, /const returnSource = source;/);
   // The frame is the app's (the expanded app, 2026-10-07): opening a room
   // from any list never writes the mode.
   assert.doesNotMatch(open, /appExpanded\s*=/);
@@ -42,9 +41,8 @@ test("every room entry follows newest through every asynchronous hydration phase
   assert.ok(resetAt >= 0 && resetAt < selectAt, "entry rearms scrolling before selecting even the same room id");
   assert.match(open, /const entryFollowToken = beginThreadEntryFollow\(roomCoordinate\)/);
   assert.match(open, /let canonicalDetailReady = Promise\.resolve\(null\)/);
-  assert.match(open, /canonicalDetailReady = requestCanonicalChatDetail\(room, source, \{ includeSlack \}\)/,
-    "a cold Slack transcript remains part of the guarded room entry");
-  // A chat that is also in Slack shows every message, so its own sends hydrate too.
+  assert.match(open, /canonicalDetailReady = requestCanonicalChatDetail\(room\)/,
+    "a cold server transcript remains part of the guarded room entry");
   assert.match(open, /hydrateThreadEntry\(entryFollowToken, \{[\s\S]*includeSent:true,[\s\S]*detailReady:canonicalDetailReady/,
     "both outbound and canonical hydration are handed to the entry-follow latch");
 
@@ -93,7 +91,7 @@ test("delayed canonical detail cannot release entry-follow before its deferred r
   const detailReady = new Promise((resolve) => { resolveDetail = resolve; });
   const runtime = new Function("detailReady", `
     let activeView = "threads";
-    let threadDetailId = "slack-room";
+    let threadDetailId = "server-room";
     let threadDetailEntryFollow = null;
     const activeMentionVisit = null;
     let threadDetailEntryFollowSeq = 0;
@@ -242,9 +240,9 @@ test("the document reader can open a canonical direct Relay before Sent hydrates
 test("a failed canonical direct read refreshes the same main-pill chat", () => {
   const refresh = html.slice(html.indexOf("async function refreshActiveCanonicalChat("), html.indexOf("let signupStage"));
   assert.match(refresh, /directContactAnchorForChatId\(room\.chatId\)/);
-  assert.match(refresh, /!isSlackIntegratedRoom\(room\) && !resolvedDirect/,
-    "resolved Relay contacts use the canonical refresh path without becoming Slack rooms");
-  const reconcile = html.slice(html.indexOf("function reconcileCanonicalChatResult"), html.indexOf("function syncSlackVisibilityButton"));
+  assert.match(refresh, /\(!resolvedDirect && !serverTranscriptRoom\(room\)\)/,
+    "resolved Relay contacts use the canonical refresh path");
+  const reconcile = html.slice(html.indexOf("function reconcileCanonicalChatResult"), html.indexOf("function storeCanonicalChatDetail"));
   assert.match(reconcile, /directContactAnchorForChatId\(id\)/);
   assert.match(reconcile, /contactChatAnchors\.set\(id, refreshed\)/,
     "fresh server truth rebuilds the direct anchor after an optimistic read rollback");

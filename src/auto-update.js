@@ -778,8 +778,18 @@ export function createAutoUpdater({
   // Prefer a terminal worker result; use an observation deadline only when the
   // worker cannot be observed. Persist the request identity to survive restarts.
   function noteUpdateFailure(target, t, result = null) {
-    try { releasePolicy.failure(activeAttempt?.channel || liveChannel(), target, { id: activeAttempt?.id, reason: result?.reason || "update-failed" }); }
+    let recorded = null;
+    try { recorded = releasePolicy.failure(activeAttempt?.channel || liveChannel(), target, { id: activeAttempt?.id, reason: result?.reason || "update-failed", since: activeAttempt?.startedAt || null }); }
     catch (error) { log(`release failure history could not be saved: ${error.message}`); }
+    // The machine slept through the attempt: nothing was learnt about the
+    // release, so it neither counts nor lengthens the wait. The next attempt
+    // starts once the machine is properly awake (sleepDeferral).
+    if (recorded?.slept === true) {
+      writeUpdateAttempt(updateStatePath, null);
+      activeAttempt = null;
+      log(`auto-update: the attempt to install ${target} was interrupted by sleep; trying again once this computer is awake`);
+      return;
+    }
     if (state.failingTarget !== target) {
       state.failingTarget = target;
       state.updateFailures = 0;
@@ -819,6 +829,16 @@ export function createAutoUpdater({
     } else {
       log(`auto-update: ${cause}; attempt ${state.updateFailures} to install ${target} failed; retrying in ~${waitLabel}`);
     }
+  }
+
+  // Never start an automatic update while the machine is asleep, resuming, or
+  // waking for a minute at a time with its lid closed: the download cannot
+  // finish. A manual `relay update` (useFailureBackoff false) is not held.
+  function sleepDeferral(extra) {
+    if (!useFailureBackoff) return null;
+    let asleep = false;
+    try { asleep = typeof releasePolicy.asleep === "function" && releasePolicy.asleep() === true; } catch {}
+    return asleep ? { status: "deferred-asleep", current: runningVersion, ...extra } : null;
   }
 
   function releaseDeferral(latest) {
@@ -865,6 +885,8 @@ export function createAutoUpdater({
     // long as necessary, but because pending updates are checked on EVERY daemon
     // loop it launches within seconds of the final turn becoming idle.
     if (busy()) return { status: "deferred-busy", current: runningVersion, latest };
+    const asleep = sleepDeferral({ latest });
+    if (asleep) return asleep;
     const workerBusy = workerBusyWait(t, runningVersion, { latest });
     if (workerBusy) return workerBusy;
     // Restart politeness: one update restart per cooldown window. The pending
@@ -1018,6 +1040,8 @@ export function createAutoUpdater({
       if ((newerGlobal || equalExplicitRepair) && managedInstallInfo(packageRoot, { platform })) {
         const releaseWait = releaseDeferral(runningVersion); if (releaseWait) return releaseWait;
         if (busy()) return { status: "deferred-rescue-busy", current: runningVersion, onDisk: canonical.version };
+        const asleep = sleepDeferral({ onDisk: canonical.version });
+        if (asleep) return asleep;
         const workerBusy = workerBusyWait(t, runningVersion, { onDisk: canonical.version });
         if (workerBusy) return workerBusy;
         let launch = null;

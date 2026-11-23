@@ -68,3 +68,31 @@ test("startup migration atomically upgrades state and every durable packet once"
 
   assert.deepEqual(migratePersistedContentFields({ homeDir, statePath }), { status: "current", migratedFiles: 0 });
 });
+
+test("startup migration skips an unreadable packet file and never writes a newer marker down", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-content-fields-"));
+  const packetsDir = path.join(homeDir, "packets");
+  fs.mkdirSync(packetsDir, { recursive: true });
+  const brokenPath = path.join(packetsDir, "broken.json");
+  const goodPath = path.join(packetsDir, "good.json");
+  fs.writeFileSync(brokenPath, "{ half a packet");
+  fs.writeFileSync(goodPath, JSON.stringify({ [OLD_HUMAN]: "hello" }));
+  const statePath = path.join(homeDir, "state.json");
+  fs.writeFileSync(statePath, JSON.stringify({ version: 1, packets: {} }));
+
+  const result = migratePersistedContentFields({ homeDir, statePath, log: () => {} });
+  assert.equal(result.status, "migrated");
+  assert.equal(result.skippedFiles, 1);
+  assert.equal(fs.readFileSync(brokenPath, "utf8"), "{ half a packet", "the unreadable file is left exactly as it was");
+  assert.deepEqual(JSON.parse(fs.readFileSync(goodPath, "utf8")), { forHuman: "hello" });
+
+  // A newer Companion's marker is "current" here and is not rewritten down.
+  fs.writeFileSync(statePath, JSON.stringify({ contentFieldSchemaVersion: CONTENT_FIELD_SCHEMA_VERSION + 1 }));
+  assert.deepEqual(migratePersistedContentFields({ homeDir, statePath, log: () => {} }), { status: "current", migratedFiles: 0 });
+  assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).contentFieldSchemaVersion, CONTENT_FIELD_SCHEMA_VERSION + 1);
+
+  // An unreadable state file skips the sweep instead of crashing the daemon.
+  fs.writeFileSync(statePath, "not json");
+  assert.equal(migratePersistedContentFields({ homeDir, statePath, log: () => {} }).status, "skipped");
+  assert.equal(fs.readFileSync(statePath, "utf8"), "not json");
+});

@@ -88,3 +88,8 @@ test("inspection sees records appended after an earlier page was read", async ()
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a transcript action this version does not know is refused, not read as \"read\"", async () => {
+  const target = { id: "rsess_claude", provider: "claude", nativeId: "native-main", state: "idle", nativeRef: { transcriptPath: "/nonexistent/session.jsonl" } };
+  await assert.rejects(inspectAiSession(target, { action: "summarize" }), /unsupported_operation_kind/);
+});

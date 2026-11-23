@@ -21,8 +21,13 @@ function harness() {
     moveTop: () => calls.push(["moveTop"]),
     focus: () => calls.push(["focus"]),
     isVisible: () => true,
+    isMinimized: () => minimized,
+    minimize: () => { minimized = true; calls.push(["minimize"]); },
+    restore: () => { minimized = false; calls.push(["restore"]); },
+    setMinimizable: (v) => calls.push(["minimizable", v]),
     webContents: { send: (channel, value) => calls.push(["send", channel, value]) },
   };
+  let minimized = false;
   const app = { dock: { show: () => { calls.push(["dock", "show"]); return Promise.resolve(); }, hide: () => calls.push(["dock", "hide"]), setIcon: () => {} }, focus: () => calls.push(["appFocus"]) };
   const displays = [
     { id: 1, bounds: { x: 0, y: 0, width: 1512, height: 982 }, workArea: { x: 0, y: 33, width: 1512, height: 894 } },
@@ -67,6 +72,8 @@ function harness() {
       elevated: () => overlayElevated,
       front: (b) => { frontmost = b; },
       refit: () => appSurfaceRefit(),
+      minimize: () => minimizeFullApp(),
+      minimized: () => fullAppMinimized(),
     };
   `);
   return { calls, bounds, displays, pointer, api: run(win, app, screen, calls) };
@@ -104,6 +111,31 @@ test("Collapse returns the pill to exactly where it was, on top, and hands the s
   assert.deepEqual(calls.filter((c) => c[0] === "allSpaces").at(-1), ["allSpaces", true, { visibleOnFullScreen: true, skipTransformProcessType: true }],
     "the pill follows you to every Space again");
   assert.deepEqual(calls.find((c) => c[0] === "execFile")?.[1], ["-b", "com.anthropic.claudefordesktop"], "the app that was in front comes back");
+});
+
+// Shane, 2026-11-20: the full app's − minimises it like any app's, and it is
+// still the full app when it comes back; folding to the pill is Collapse's job.
+test("Minimise in the full app minimises the window and keeps the full app", () => {
+  const { calls, bounds, api } = harness();
+  assert.equal(api.minimize(), false, "the small card is not the full app: the renderer folds it instead");
+  assert.ok(!calls.some((c) => c[0] === "minimize"));
+  api.size(1512, 949);
+  assert.ok(calls.some((c) => c[0] === "minimizable" && c[1] === true), "the full app can be minimised");
+  assert.equal(api.minimize(), true);
+  assert.equal(api.minimized(), true);
+  assert.equal(api.active(), true, "still the full app");
+  assert.deepEqual(bounds, { x: 0, y: 33, width: 1512, height: 949 }, "at full size, not folded");
+  // Collapse from a minimised full app restores it before it shrinks.
+  api.size(344, 524, true);
+  const restoreAt = calls.findIndex((c) => c[0] === "restore");
+  const shrinkAt = calls.findLastIndex((c) => c[0] === "setBounds");
+  assert.ok(restoreAt >= 0 && restoreAt < shrinkAt, "restored at full size, then folded");
+  assert.deepEqual(calls.filter((c) => c[0] === "minimizable").at(-1), ["minimizable", false], "the pill is not minimisable");
+});
+
+test("The full app's minus asks main to minimise before it would fold", () => {
+  const handler = html.slice(html.indexOf('minimizeBtnEl.addEventListener("click"'), html.indexOf("// ---------- drag the lockup"));
+  assert.match(handler, /wideLayoutActive\(\)[\s\S]*window\.relay\.minimizeApp\(\)[\s\S]*if \(minimized\) return;[\s\S]*requestToggle\(\)/);
 });
 
 // Sven, 26 Oct 2026: the full app closed with the ✕ or the menu bar left the

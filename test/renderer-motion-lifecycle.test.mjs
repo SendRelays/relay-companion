@@ -31,19 +31,16 @@ test("collapsed and hidden surfaces stop frame watching, run polling, and view r
   assert.match(html, /function flushDeferredSurfaceRender\(\)/);
 });
 
-test("hidden surfaces defer canonical hydration, reads, and Slack connection paints", () => {
+test("hidden surfaces defer canonical hydration and reads", () => {
   const reconcile = html.slice(
     html.indexOf("function reconcileCanonicalChatResult("),
-    html.indexOf("function syncSlackVisibilityButton(", html.indexOf("function reconcileCanonicalChatResult(")),
+    html.indexOf("function storeCanonicalChatDetail(", html.indexOf("function reconcileCanonicalChatResult(")),
   );
   const poll = html.slice(html.indexOf("async function refreshActiveCanonicalChat("), html.indexOf("let signupStage"));
-  const slack = html.slice(html.indexOf("function paintSlackConnectionSurface("), html.indexOf("function resetSignOutArm("));
   const payload = html.slice(html.indexOf("function onPayload("), html.indexOf("window.relay.onInbox"));
 
   assert.match(reconcile, /if \(!rendererSurfaceActive\(\)\) \{\s*surfaceRenderDeferred = true;\s*return;/);
   assert.match(poll, /activeCanonicalChatRefresh \|\| !rendererSurfaceActive\(\)/);
-  assert.match(slack, /function paintSlackConnectionSurface\(\)[\s\S]*!rendererSurfaceActive\(\)[\s\S]*surfaceRenderDeferred = true/);
-  assert.match(slack, /async function refreshSlackConnection[\s\S]*!rendererSurfaceActive\(\)[\s\S]*slackConnectionRefreshDeferred = true/);
   assert.match(payload, /const paintSurface = rendererSurfaceActive\(\)/);
   assert.match(payload, /if \(paintSurface && activeView === "threads" && threadDetailId\)/);
   assert.match(payload, /if \(paintSurface\) readVisibleChatRoom\(\);\s*else surfaceRenderDeferred = true;/);

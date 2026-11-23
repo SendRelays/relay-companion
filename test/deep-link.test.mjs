@@ -101,33 +101,27 @@ test("setup handoffs carry only an opaque intent and trusted origin", () => {
   for (const url of ["relay://setup?intent=short&origin=https://sendrelays.com",`relay://setup?intent=${id}&origin=https://evil.example`,`relay://setup?intent=${id}&origin=http://sendrelays.com`,`relay://user:pass@setup?intent=${id}&origin=https://sendrelays.com`]) assert.equal(parseRelayDeepLink(url),null);
 });
 
-test("a Slack card click by this account opens the Relay in the pill, once, whatever browser Slack used", async () => {
+test("an Open Relay link opens the Relay from its chat in the pill, once", async () => {
   const { readFile } = await import("node:fs/promises");
   const main = await readFile(new URL("../overlay/main.cjs", import.meta.url), "utf8");
   const client = await readFile(new URL("../src/client.js", import.meta.url), "utf8");
-  assert.match(client, /claimSlackOpenRequests\(\) \{\s*return this\.#req\("POST", "\/v1\/slack\/open-requests\/claim", \{\}\);/);
-  // Claimed at boot and on every account-change wake, through the relay:// queue.
-  assert.match(main, /claimSlackOpens\(\);\s*sentLiveWake = startSentLiveWake\(/);
-  assert.match(main, /onChange: async \(\) => \{\s*claimSlackOpens\(\);/);
-  assert.match(main, /queueRelayDeepLink\(\{ messageId: String\(request\.messageId\), host: request\.host, viaSlack: true/);
-  // Claude Code and Codex too, opened from their chat (a channel message has no legacy packet).
-  assert.match(main, /\["relay", "conductor", "claude", "codex", "claude-app", "chatgpt"\]\.includes\(request\.host\)/);
+  // Slack is gone: nothing claims Slack card clicks any more.
+  assert.doesNotMatch(client, /claimSlackOpenRequests|\/v1\/slack\//);
+  assert.doesNotMatch(main, /claimSlackOpens|viaSlack/);
   // An app hand-off lands the person in that app; only Open Relay brings the pill forward.
   assert.match(main, /if \(parsed\.host === "relay"\) requestExternalReopen\(randomUUID\(\)\);/);
-  assert.match(main, /parsed\.host === "relay" \|\| parsed\.host === "conductor" \|\| parsed\.viaSlack\) \{/);
+  assert.match(main, /if \(parsed\.host === "relay" \|\| parsed\.host === "conductor"\) \{/);
   assert.match(main, /\.\.\.\(parsed\.host !== "relay" \? \{ app: parsed\.host \} : \{\}\)/);
-  // The browser's relay:// link and the server's word are one click: the second only answers the browser.
+  // A second delivery of the same click only answers the browser.
   assert.match(main, /\["relay", "conductor", "claude", "codex", "claude-app", "chatgpt"\]\.includes\(parsed\.host\) && !freshRelayOpen\(parsed\)/);
   assert.match(main, /const RELAY_OPEN_DEDUPE_MS = 15_000;/);
 });
 
-test("after sleep or unlock the pill reopens its account-change wait at once and claims waiting Slack clicks", () => {
-  // A held request can be a dead socket after sleep; David's Slack click was claimed four minutes late.
+test("after sleep or unlock the pill reopens its account-change wait at once", () => {
+  // A held request can be a dead socket after sleep.
   assert.match(overlay, /function restartSentLiveWake\(\) \{\s*if \(sentLiveWake\) \{ sentLiveWake\.stop\(\); sentLiveWake = null; \}\s*sentLiveWakeToken = "";/);
   assert.match(overlay, /powerMonitor\.on\("resume", \(\) => \{\s*systemSuspended = false;\s*restartSentLiveWake\(\);/);
   assert.match(overlay, /powerMonitor\.on\("unlock-screen", \(\) => \{\s*screenLocked = false;\s*restartSentLiveWake\(\);/);
-  // Reopening runs the reconcile, which claims before it waits.
-  assert.match(overlay, /claimSlackOpens\(\);\s*sentLiveWake = startSentLiveWake\(/);
 });
 
 test("a chat or channel message hands off to Claude Code / Codex: staged from the server when this device never received it", () => {

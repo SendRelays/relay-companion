@@ -91,7 +91,7 @@ test("the notification section stops clicks, so flipping a switch never folds th
   const settings = between(html, "function renderSettings()", "function wireSettings()");
   assert.match(settings, /html \+= `<div class="sv-group" id="quietPrefs" data-stop="1"><div class="sv-open-list">\$\{quietPrefsHtml\(info\)\}\$\{milestoneRelaysHtml\(info\)\}<\/div><\/div>`;/);
   // and wireSettings really stops every data-stop zone.
-  const wire = between(html, "function wireSettings()", "const slackConnect =");
+  const wire = between(html, "function wireSettings()", "// Managing addresses lives on the web");
   assert.match(wire, /for \(const z of settingsViewEl\.querySelectorAll\('\[data-stop="1"\]'\)\) \{\s*z\.addEventListener\("click", \(e\) => e\.stopPropagation\(\)\);/);
   assert.match(wire, /for \(const sw of settingsViewEl\.querySelectorAll\("\[data-quiet\]"\)\) \{\s*sw\.addEventListener\("click", \(\) => toggleQuietPref\(sw\.getAttribute\("data-quiet"\), sw\)\);/);
 });

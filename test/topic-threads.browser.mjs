@@ -29,7 +29,7 @@ try {
       postCount:window.fixturePosts.length, newPostCount:0, latestPostAt:window.fixturePosts[0].createdAt, archivedAt:null, membership });
     window.fixturePayload = { account:{paired:true,userId:'usr_self',name:'Preview Person',email:'preview@example.com',hasSentRelay:true},
       ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1,topicStandingRules:[]}, features:{topics:true},
-      relays:[], sent:[], requests:[], chats:[], slackChats:[] };
+      relays:[], sent:[], requests:[], chats:[] };
     const api = {
       isTestOverlay:true,
       refresh:async()=>structuredClone(window.fixturePayload),

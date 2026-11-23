@@ -390,7 +390,7 @@ test("the viewer window is sandboxed, isolated, frameless and loads nothing from
   assert.match(create, /setWindowOpenHandler\(\(\) => \(\{ action: "deny" \}\)\)/);
   assert.match(create, /on\("will-navigate"/);
   assert.match(main, /const VIEWER_WIN = \{ width: 760, height: 560, minWidth: 480, minHeight: 360 \}/);
-  assert.match(main, /const VIEWER_BACKGROUND = "#221E1B"/);
+  assert.match(main, /const VIEWER_BACKGROUND = "#2A2521"/);
 
   const csp = viewerHtml.match(/content="(default-src[^"]+)"/)?.[1] || "";
   assert.match(csp, /default-src 'none'/);
@@ -445,7 +445,7 @@ test("the image zooms about the pointer, pans by drag and stays over the stage",
   assert.match(viewerRenderer, /el\.stage\.addEventListener\("wheel", [\s\S]{0,700}\{ passive: false \}\)/);
   assert.match(viewerRenderer, /zoom\.x = px - \(px - zoom\.x\) \* ratio;/, "the point under the pointer stays put");
   assert.match(viewerRenderer, /el\.stage\.setPointerCapture\(event\.pointerId\)/);
-  assert.match(viewerRenderer, /zoom\.x = Math\.max\(-slackX, Math\.min\(slackX, zoom\.x\)\)/);
+  assert.match(viewerRenderer, /zoom\.x = Math\.max\(-spareX, Math\.min\(spareX, zoom\.x\)\)/);
   // Every other picture opens fitted.
   assert.match(between(viewerRenderer, "function goTo(index)", "// ---- the file stages"), /resetZoom\(false\)/);
 });

@@ -19,7 +19,7 @@ try {
     window.calls = [];
     window.events = {};
     const ok = (value) => ({ ok:true, result:copy(value) });
-    const payload = () => ({ account, ui:{ canDismiss:true, onboardingRequired:false, completedOnboardingVersion:1 }, features:{ requests:false, todo:false, slack:false, googleContacts:false }, contacts, relays:[], sent:[], outbox:[], tasks:[], chats:[], slackChats:[] });
+    const payload = () => ({ account, ui:{ canDismiss:true, onboardingRequired:false, completedOnboardingVersion:1 }, features:{ requests:false, todo:false }, contacts, relays:[], sent:[], outbox:[], tasks:[], chats:[] });
     const api = {
       isTestOverlay:true,
       refresh:async () => copy(payload()), contacts:async () => copy(contacts),
@@ -238,23 +238,9 @@ try {
   assert.deepEqual([field.border, field.outline, field.shadow, field.appearance], ["0px", "none", "none", "none"]);
   assert.notEqual(field.frame, "none", "the focus ring is on the frame");
 
-  // Google contacts is not a search result: its card steps aside while a
-  // query is typed (behind the Dev gate, here turned on).
-  await page.evaluate(async () => {
-    const next = await window.relay.refresh();
-    window.events.onInbox({ ...next, features:{ ...next.features, googleContacts:true } });
-  });
-  await page.locator('[data-view="relays"]').click();
-  await page.locator('[data-view="contacts"]').click();
-  await page.locator("#cvGoogle").waitFor({ state:"visible" });
-  await search("da");
-  assert.equal(await page.locator("#cvGoogle").isVisible(), false, "typing hides the Google card");
-  await page.locator("#cvSearch").press("Escape");
-  await page.locator("#cvGoogle").waitFor({ state:"visible" });
-
   await page.locator('[data-view="relays"]').click();
   assert.equal(await page.locator("#cvSearch").isVisible(), false);
   assert.deepEqual(errors, []);
   assert.deepEqual(external, []);
-  console.log("PASS: one field finds and adds, Groups then People A–Z, group decks, group creation/members, search narrowing (by group or member) and bold prefixes, borderless field, Google card steps aside while searching, contact success/miss/error, invite copy, native and expanded layout.");
+  console.log("PASS: one field finds and adds, Groups then People A–Z, group decks, group creation/members, search narrowing (by group or member) and bold prefixes, borderless field, contact success/miss/error, invite copy, native and expanded layout.");
 } finally { await browser.close(); }

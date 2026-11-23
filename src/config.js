@@ -446,7 +446,7 @@ export function apiUrl() {
   const canonical = canonicalizeApiUrl(stored) || DEFAULT_API_URL;
   // A Companion on the dev release channel must talk to the dev API. Older
   // setup instructions changed only the npm channel, leaving the persisted API
-  // at production. That produced a Dev Slack UI whose server returned a raw
+  // at production. That produced a Dev UI whose server returned a raw
   // route_not_found. Repair only the known incoherent default/legacy pair;
   // explicit local and staging origins remain valid developer choices.
   const devChannel = normalizeUpdateChannel(process.env.RELAY_UPDATE_CHANNEL || config.updateChannel) === UPDATE_CHANNEL_DEV;

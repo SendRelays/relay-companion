@@ -23,9 +23,9 @@ try {
     window.fixture = {
       account:{paired:true,userId:'self',name:'Test User',email:'self@example.test',hasSentRelay:true},
       ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1},
-      features:{requests:false,todo:false,slack:false,replyThreads:true},
+      features:{requests:false,todo:false,replyThreads:true},
       contacts:[...names.map((name,i) => ({contactId:`contact-${i}`,name,email:`person${i}@example.test`})), {contactId:'contact-priya',name:'Priya Raman',email:'priya@example.test'}],
-      relays, sent:[],requests:[],chats:[],slackChats:[],
+      relays, sent:[],requests:[],chats:[],
     };
     const groups = [{id:'grp_granular',name:'Granular',owner:{userId:'self',name:'Test User',email:'self@example.test'},members:[{userId:'s',name:'Shane Acton',email:'shane@example.test'},{userId:'a',name:'Andrew Ng',email:'andrew@example.test'}]}];
     const api = {isTestOverlay:true,refresh:async()=>structuredClone(window.fixture),refreshSent:async()=>({items:[]}),contacts:async()=>window.fixture.contacts,groups:async()=>({ok:true,result:groups}),accountInfo:async()=>window.fixture.account,agentSurfaces:async()=>({}),
@@ -107,7 +107,7 @@ try {
   await input.press('Enter');
   await page.waitForFunction(()=>window.opened.includes('priya@example.test'));
   await page.waitForFunction(()=>activeView==='threads');
-  assert.equal(await page.locator('#thSlackPeople .th-sp-away').count(),0,'someone on Relay gets no such line');
+  assert.equal(await page.locator('#thPeopleLine .th-sp-away').count(),0,'someone on Relay gets no such line');
   await page.locator('#thBack').click();
   await page.waitForFunction(()=>activeView==='relays');
 
@@ -121,7 +121,7 @@ try {
   await page.waitForFunction(()=>window.opened.includes('dan@studio.io'));
   await page.waitForFunction(()=>activeView==='threads');
   // Someone not on Relay hears nothing until they join: the room says so, and copies the invite link.
-  await page.locator('#thSlackPeople').getByText('dan@studio.io isn’t on Relay yet. Send them your invite link.').waitFor();
+  await page.locator('#thPeopleLine').getByText('dan@studio.io isn’t on Relay yet. Send them your invite link.').waitFor();
   await page.getByRole('button',{name:'Copy invite link'}).click();
   assert.equal(await page.evaluate(()=>window.invitesCopied),1);
   await page.locator('#thBack').click();

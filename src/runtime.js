@@ -15,15 +15,32 @@ function ensureDir(dir) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); }
 export const hasActiveTurns = acpHasActiveTurns;
 function sessionRefBusy(ref) { const worker = acpWorker(ref?.hostSessionId); return Boolean(worker && !worker.settled); }
 export function createHostAdapters(options = {}) { return createAcpHostAdapters({ renderAgentBriefing, relayMcpLaunchSpec, openUiTarget, openExternal: defaultOpenExternal, ...options }); }
+// An empty ledger stands in for a missing or corrupt file. One that exists
+// but could not be read just now (locked on Windows) is remembered, and that
+// stand-in is never written back: it would forget which Task messages were
+// already processed.
+const unreadableLedgers = new WeakSet();
 export function readTaskLedger() {
+  let text;
   try {
-    return JSON.parse(fs.readFileSync(taskLedgerPath(), "utf8"));
+    text = fs.readFileSync(taskLedgerPath(), "utf8");
+  } catch (error) {
+    const empty = { sessions: {}, processedMessages: {}, updatedAt: now() };
+    if (error && error.code !== "ENOENT") unreadableLedgers.add(empty);
+    return empty;
+  }
+  try {
+    return JSON.parse(text);
   } catch {
     return { sessions: {}, processedMessages: {}, updatedAt: now() };
   }
 }
 
 export function writeTaskLedger(ledger) {
+  if (unreadableLedgers.has(ledger)) {
+    console.warn(`[relay] ${taskLedgerPath()} could not be read; not overwriting it this time`);
+    return;
+  }
   atomicWriteJsonSync(taskLedgerPath(), { ...ledger, updatedAt: now() }, { mode: 0o600 });
 }
 

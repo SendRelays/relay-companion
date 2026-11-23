@@ -80,8 +80,8 @@ test("foreign channels expose a self-only leave action without roster administra
   // What separates it is in its details, where only Leave is offered.
   assert.doesNotMatch(html, /Added you/);
   assert.match(html, /editable && member\.role !== "owner" && id/);
-  assert.match(html, /else if \(!mine && !slack\)/,
-    "only native Relay channels expose the legacy leave action");
+  assert.match(html, /else if \(!mine\)/,
+    "a group someone else owns offers Leave");
   assert.match(html, /data-gd-leave/);
   assert.match(html, /<button class="gd-leave" type="button" data-gd-leave>Leave group<\/button>/);
   assert.doesNotMatch(html, /gd-leave-copy/);
@@ -175,33 +175,11 @@ test("leaving keeps history but disables every group reply affordance", () => {
   assert.match(html, /!m\.request && !groupPostingBlocked/);
 });
 
-test("Slack-owned channels join the Groups pane without becoming editable Relay rosters", () => {
-  assert.match(html, /function syncSlackChannelRows\(\)/);
-  assert.match(html, /payload\.chats \|\| \[\]/);
-  assert.match(html, /chat\.channel\?\.slack/);
-  assert.match(html, /provider:"slack"/);
-  assert.match(html, /canPost:chat\.channel\.canPost !== false/);
-  assert.match(html, /archivedAt:chat\.channel\.archived \?/,
-    "read-only and archived are distinct Slack states");
-  assert.match(html, /if \(isSlackIntegratedRoom\(room\) \|\| slackChat\)/,
-    "posting state follows the exact integration binding, including Slack DMs and compatibility summaries");
-  assert.match(html, /slackChat\?\.channel\?\.canPost === false/);
-  assert.match(html, /Posting is unavailable for this Slack channel\./);
-  assert.match(html, /groupsList = result\.slice[\s\S]*syncSlackChannelRows\(\);[\s\S]*const wantedId/,
-    "refreshing native groups must restore the Slack channel projection before lookup");
+test("groups are native Relay rosters, with no projected channels", () => {
+  assert.doesNotMatch(html, /syncSlackChannelRows|provider:"slack"|slackMark\.png|cvg-slack-logo/);
   assert.match(html, /Group info is still syncing\./);
-  assert.match(html, /src="slackMark\.png" alt="Slack"/);
-  assert.match(html, /slack \? "" : `<span class="cvg-edit"/,
-    "Slack controls its channel roster, so Relay must not expose the legacy editor");
-  // The Slack mark is the row's tile; a separate "Slack" badge was redundant.
   const rows = html.slice(html.indexOf("function renderGroups()"), html.indexOf("function openGroupRoom(groupId)"));
-  // The row's tile is the group's deck, and for Slack the deck is the mark.
   assert.match(rows, /const tile = groupAvatarStack\(g, roster\);/);
-  const stack = html.slice(html.indexOf("function groupAvatarStack(group, roster)"), html.indexOf("function groupActivityAt("));
-  assert.match(stack, /^function groupAvatarStack\(group, roster\) \{\s*if \(group\.provider === "slack"\) \{\s*return '<img class="cvg-slack-logo" src="slackMark\.png" alt="Slack" \/>';\s*\}/);
-  assert.match(rows, /const sub = slack \? \(g\.lastPreview \|\| "Slack channel"\) : [^;\n]*groupMemberSummary\(/);
+  assert.match(rows, /<span class="cvg-edit" role="button" tabindex="0" data-group-edit=/);
   assert.doesNotMatch(rows, /cvg-badge/);
-  // Slack projection rows are never the viewer's own roster.
-  const sync = html.slice(html.indexOf("function syncSlackChannelRows()"), html.indexOf("function syncSlackChannelRows()") + 2000);
-  assert.match(sync, /owned:false/);
 });

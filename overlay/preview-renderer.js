@@ -797,18 +797,6 @@ try { if (localStorage.getItem("relayTheme") === "dark") document.documentElemen
 
     row.appendChild(bubble);
 
-    if (entry.origin === "slack" || entry.provider?.name === "slack") {
-      const provider = document.createElement("div");
-      provider.className = "bubble-provider";
-      const mark = document.createElement("img");
-      mark.src = "slackMark.png";
-      mark.alt = "";
-      const label = document.createElement("span");
-      label.textContent = "From Slack";
-      provider.append(mark, label);
-      row.appendChild(provider);
-    }
-
     const stamp = document.createElement("div");
     stamp.className = "bubble-time";
     if (entry.state === "pending") stamp.textContent = "Sending…";
@@ -956,8 +944,6 @@ try { if (localStorage.getItem("relayTheme") === "dark") document.documentElemen
     chatStateEl.classList.add("gone");
 
     const fragment = document.createDocumentFragment();
-    const visibleIds = new Set(entries.map((entry) => entry.relayId).filter(Boolean));
-    const shownMissingRoots = new Set();
     let previousDay = "";
     for (let i = 0; i < entries.length; i += 1) {
       const entry = entries[i];
@@ -971,24 +957,6 @@ try { if (localStorage.getItem("relayTheme") === "dark") document.documentElemen
         divider.textContent = dayLabel(entry.at);
         fragment.appendChild(divider);
         previousDay = day;
-      }
-
-      if (
-        entry.provider?.name === "slack"
-        && entry.inReplyToRelayId
-        && !visibleIds.has(entry.inReplyToRelayId)
-        && !shownMissingRoots.has(entry.threadId || entry.inReplyToRelayId)
-      ) {
-        shownMissingRoots.add(entry.threadId || entry.inReplyToRelayId);
-        const stub = document.createElement("div");
-        stub.className = "thread-stub";
-        const mark = document.createElement("img");
-        mark.src = "slackMark.png";
-        mark.alt = "";
-        const label = document.createElement("span");
-        label.textContent = "Earlier Slack thread";
-        stub.append(mark, label);
-        fragment.appendChild(stub);
       }
 
       // A run is the same person speaking without a long pause: it gets one

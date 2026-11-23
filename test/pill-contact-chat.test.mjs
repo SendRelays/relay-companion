@@ -66,7 +66,7 @@ test("the room with one person is asked for by address, in a body rather than a 
 });
 
 test("clicking a contact opens the conversation; only Edit opens the card", () => {
-  const rows = between(html, 'for (const el of [...cvListEl.querySelectorAll(".cv-item"), ...cvSlackListEl.querySelectorAll(".cv-item")])', "  /**");
+  const rows = between(html, 'for (const el of cvListEl.querySelectorAll(".cv-item"))', "  /**");
   // The row is the person: it opens the room, never the form about them.
   assert.match(rows, /openContactRoom\(el\.getAttribute\("data-contact"\)\)/);
   assert.doesNotMatch(rows, /openContactForm\(el\.getAttribute/);
@@ -123,25 +123,22 @@ test("a room entered from People keeps People lit, and Back returns there", () =
   // The lit tab follows threadsSource, so "contacts" is what keeps the
   // highlight on People instead of throwing it to Relays (David).
   const source = between(html, "function isConversationRoomSource(source = threadsSource)", "\n  function openThreadDetail");
-  assert.match(source, /source === "chat" \|\| source === "relays" \|\| source === "slack" \|\| source === "contacts"/,
-    "Slack is another room index while the existing People source remains intact");
-  // A Slack-linked room reads the Slack projection, but the tab that stays lit
-  // is still the list it was opened from (there is no Slack tab).
+  assert.match(source, /source === "chat" \|\| source === "relays" \|\| source === "contacts"/,
+    "the People source is a room index");
   // In the expanded app the lit tab is the sidebar's list, which is the same
   // list the room was opened from.
-  assert.match(html, /const tabView = wideLayoutActive\(\) \? wideSideTab\(\)\s*: activeView === "threads" \? \(threadsSource === "slack" \? threadsReturnSource : threadsSource\)/);
+  assert.match(html, /const tabView = wideLayoutActive\(\) \? wideSideTab\(\)\s*: activeView === "threads" \? threadsSource/);
 
   // Back goes back to the list that was clicked, on the row it left.
   const back = between(html, "thBackEl.addEventListener", "let threadsSource =");
-  // A Slack-linked room reads the Slack projection, yet Back still returns to
-  // the list it was opened from.
-  assert.match(back, /const backFrom = threadsSource === "slack" \? threadsReturnSource : threadsSource;/);
+  // Back returns to the list it was opened from.
+  assert.match(back, /const backFrom = threadsSource;/);
   assert.match(back, /backFrom === "contacts" \? "contacts"/);
   const opener = between(html, "\n  function openThreadDetail", "\n  let settingsInfo");
-  assert.match(opener, /const returnSource = source === "slack" \? "relays" : source;/);
+  assert.match(opener, /const returnSource = source;/);
   assert.match(opener, /threadsReturnSource = returnSource;/);
   // A reader opened from that room hands the same list back on close.
-  assert.match(html, /source: threadsSource === "slack" \? threadsReturnSource : threadsSource,\s*roomScroll: captureRoomScroll\(\),/);
+  assert.match(html, /source: threadsSource,\s*roomScroll: captureRoomScroll\(\),/);
   assert.match(back, /destinationView === "contacts" \? contactsListScrollTop/);
   assert.match(back, /activeView = destinationView;/);
   assert.match(html, /if \(activeView === "contacts" && source === "contacts" && scrollEl\) contactsListScrollTop = scrollEl\.scrollTop;/);
@@ -259,7 +256,7 @@ test("an empty direct chat can be written to from the main pill", () => {
   const composer = between(html, "const emptyGroupAnchor =", "if (!sendAnchor ||");
   assert.match(composer, /const emptyRelayDirectAnchor = chatRoom && !chatRoom\.isGroup/);
   assert.match(composer, /chatRoom\.addressRecipient && chatRoom\.addressRecipient\.email/);
-  assert.match(composer, /emptyGroupAnchor \|\| emptySlackDirectAnchor \|\| emptyRelayDirectAnchor/);
+  assert.match(composer, /emptyGroupAnchor \|\| emptyRelayDirectAnchor/);
   assert.match(composer, /emptyRoomAnchor\.addressRecipient/);
   // The direct address, never a guessed chat id, starts the first message.
   const anchor = between(html, "function directContactRoomAnchor", "function mergeDirectContactAnchor");
@@ -291,7 +288,7 @@ test("a resolved direct chat keeps one identity through hydration and account ch
   assert.match(merge, /threadId:anchor\.threadId/);
   assert.match(merge, /anchor\.threadId,[\s\S]*?\.\.\.\(existing\.threadIds \|\| \[\]\)/,
     "the synthetic open coordinate and every later real thread id remain aliases of one room");
-  const lookup = between(html, "function directContactAnchorForChatId", "function slackIntegrationForChat");
+  const lookup = between(html, "function directContactAnchorForChatId", "function chatSections()");
   assert.match(lookup, /return contactChatAnchors\.get\(id\) \|\| null/,
     "canonical chat id is the one registry key, even if a contact address changes");
   const reader = between(html, "function readerRow(id)", "const RX_PRIMARY");

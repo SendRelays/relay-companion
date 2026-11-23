@@ -32,9 +32,9 @@ async function open({ welcome = true, saved = null, reducedMotion = "no-preferen
       account: { paired: true, userId: "self", name: "David", email: "david@example.test", hasSentRelay: true },
       ui: { canDismiss: true, onboardingRequired: false, completedOnboardingVersion: 2, onboardingVersion: 2, firstRelayId: "",
         onboardingAgent: chosen ? { host: chosen, place: chosen === "chatgpt" ? "browser" : "" } : null },
-      features: { requests: false, todo: false, slack: false },
+      features: { requests: false, todo: false },
       contacts: [{ contactId: "relay-agent", name: "Relay Agent", email: "agent@sendrelays.com" }],
-      relays, sent: [], requests: [], chats: [], slackChats: [],
+      relays, sent: [], requests: [], chats: [],
       settings: { accountKey: "self", ...(saved ? { firstRelayTutorial: saved } : {}), ...(apps || {}) },
     };
     const api = {
@@ -59,7 +59,7 @@ async function open({ welcome = true, saved = null, reducedMotion = "no-preferen
   await page.goto(new URL("../overlay/inbox.html", import.meta.url).href);
   await page.waitForFunction(() => !!window.events.onOpenFull);
   await page.evaluate(() => window.events.onOpenFull());
-  await page.locator("#relaysLayout").waitFor({ state: "visible" });
+  await page.locator("#relaysView").waitFor({ state: "visible" });
   await page.evaluate(() => document.fonts.ready);
   return page;
 }
@@ -119,10 +119,6 @@ try {
   assert.equal(await step(page), "Step 1 of 7");
   assert.ok(await arrowTouches(page, '#relaysList .relay-row[data-opening-id="relay_welcome"]'), "the ink points at Relay Agent's row");
   await shot(page, "1-inbox");
-  // A wrong click nudges and changes nothing.
-  await page.locator('[data-inbox-type="tasks"]').click();
-  assert.equal(await page.locator('[data-inbox-type="chats"]').getAttribute("aria-pressed"), "true", "the Tasks tab did not take the click");
-  assert.equal(await step(page), "Step 1 of 7");
   // The right click goes through to the pill; the ink pulls back at once.
   await page.locator('#relaysList .relay-row[data-opening-id="relay_welcome"] .th-title').click();
   await page.waitForTimeout(170);

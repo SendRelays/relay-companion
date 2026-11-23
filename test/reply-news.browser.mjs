@@ -38,7 +38,7 @@ try {
     for (const row of [...relays, ...sent]) Object.assign(row, { recipientGroupId: group.id, recipientGroupName: group.name });
     window.fixture = { account: { paired: true, userId: "self", name: "David", email: "david@example.com", hasSentRelay: true },
       ui: { canDismiss: true, onboardingRequired: false, completedOnboardingVersion: 1, soundsMuted: true },
-      features: { replyThreads: true }, relays, sent, requests: [], chats: [], slackChats: [], outbox: [] };
+      features: { replyThreads: true }, relays, sent, requests: [], chats: [], outbox: [] };
     window.acks = [];
     const api = { isTestOverlay: true, refresh: async () => window.fixture, refreshSent: async () => ({ items: window.fixture.sent }),
       contacts: async () => [], groups: async () => ({ ok: true, result: [group] }), accountInfo: async () => window.fixture.account, agentSurfaces: async () => ({}),

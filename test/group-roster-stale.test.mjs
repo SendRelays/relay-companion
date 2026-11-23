@@ -28,7 +28,7 @@ function harness({ groups, contacts = [] }) {
   const calls = { groups: 0, renderChat: 0, renderThreadDetail: 0 };
   const clock = { now: 1_000_000 };
   const env = new Function(
-    "Date", "window", "cvgCall", "syncSlackChannelRows", "renderGroups", "contactsList",
+    "Date", "window", "cvgCall", "renderGroups", "contactsList",
     "activeView", "threadDetailId", "renderChat", "renderThreadDetail",
     `"use strict"; ${mentionHelpers}\n${declarations}\n${loader}\n` +
     "return { loadGroups, groupsLoadDue, groupRosterStaleFor, refreshGroupRosterIfStale, " +
@@ -41,7 +41,6 @@ function harness({ groups, contacts = [] }) {
       try { res = await fn(); } catch (e) { res = { ok: false, error: String(e && e.message) }; }
       return res && res.ok === true ? res.result : null;
     },
-    () => {},
     () => {},
     contacts,
     "chat",

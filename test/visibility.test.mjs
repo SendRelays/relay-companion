@@ -12,6 +12,8 @@ const {
   restoredDismissSnooze,
   hostPollDelayMs,
   sentRefreshDelayMs,
+  OWNED_OVERLAY_PREF_KEYS,
+  overlayPrefsNotOwned,
 } = require("../overlay/visibility.cjs");
 const { loadQueue, saveQueue } = require("../overlay/attention-queue.cjs");
 
@@ -289,4 +291,34 @@ test("quitRelayCommand stops the daemon BEFORE the pill's own service (macOS) an
   assert.equal(cmd, "cmd");
   assert.match(winArgs[1], /Relay Companion Daemon/);
   assert.match(winArgs[1], /Relay Companion Pill/);
+});
+
+// ---- overlay-prefs keys a newer pill wrote survive a rollback ----
+
+test("an overlay-prefs key this version does not own survives a write", () => {
+  // What a newer pill left on disk before a rollback to this version.
+  const onDisk = { dismissed: true, notifyStyle: "banner", futureLayout: { dense: true }, pendingAttention: {} };
+  const foreign = overlayPrefsNotOwned(onDisk);
+  assert.deepEqual(foreign, { futureLayout: { dense: true } });
+  // writeOverlayPrefs spreads the foreign keys first and this version's own
+  // values after them, through the attention queue's saver.
+  const written = saveQueue(loadQueue({}), { ...foreign, dismissed: false, notifyStyle: "quiet" });
+  assert.deepEqual(written.futureLayout, { dense: true }, "the newer version's key is kept");
+  assert.equal(written.dismissed, false, "this version's own keys are still written by it");
+  assert.equal(written.notifyStyle, "quiet");
+  assert.deepEqual(overlayPrefsNotOwned(null), {});
+  assert.deepEqual(overlayPrefsNotOwned(["x"]), {});
+});
+
+test("every key the overlay writes is an owned key, so it is never frozen as foreign", () => {
+  const main = require("node:fs").readFileSync(new URL("../overlay/main.cjs", import.meta.url), "utf8");
+  const writer = main.slice(main.indexOf("function writeOverlayPrefs()"), main.indexOf("// Commit startup recovery"));
+  assert.match(writer, /attention\.saveQueue\(attentionQueue, \{\n\s+\.\.\.foreign,\n/, "foreign keys go first so owned values win");
+  const literal = writer.slice(writer.indexOf("...foreign,"), writer.indexOf("});"));
+  const written = [...literal.matchAll(/^\s+([A-Za-z]+)[,:]/gm)].map((m) => m[1]);
+  assert.ok(written.length >= 13);
+  for (const key of [...written, "pendingAttention"]) assert.ok(OWNED_OVERLAY_PREF_KEYS.has(key), `${key} is owned`);
+  for (const key of OWNED_OVERLAY_PREF_KEYS) {
+    assert.ok(written.includes(key) || key === "pendingAttention", `${key} is written by writeOverlayPrefs`);
+  }
 });

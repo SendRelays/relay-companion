@@ -44,7 +44,7 @@ try {
     const payload = {
       account:{ paired:true, userId:"self", name:"David", email:"david@example.com", hasSentRelay:true },
       ui:{ canDismiss:true, onboardingRequired:false, completedOnboardingVersion:1 },
-      features:{}, relays:[relay, relayDocument], sent:[], requests:[], chats:[], slackChats:[], outbox:[],
+      features:{}, relays:[relay, relayDocument], sent:[], requests:[], chats:[], outbox:[],
     };
     window.fixtureCopied = "";
     Object.defineProperty(navigator, "clipboard", { configurable:true, value:{ writeText:async (value) => { window.fixtureCopied = value; } } });

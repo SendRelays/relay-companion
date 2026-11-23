@@ -13,8 +13,8 @@ const slice = (start, end) => {
 
 // THE CHAPTER AFTER THE FIRST SEND (David, 2026-09-13; trimmed 2026-10-10).
 // A hello to an inviter is celebrated (ten seconds, or Continue); a first
-// Relay that was a link lands on It's ready to send instead. Slack follows
-// when offered, and then the chapter ends by itself, opening the room of the
+// Relay that was a link lands on It's ready to send instead, and then the
+// chapter ends by itself, opening the room of the
 // relay you wrote: no second link lesson and no Grow your network screen.
 
 test("before the send, the handoff screen stays; after it, the chapter renders", () => {
@@ -64,7 +64,8 @@ test("after the first Relay there is no second link lesson and no Grow your netw
   assert.match(chapter, /It’s ready to send\./);
   assert.match(chapter, /id="suLinkContinue"[^>]*>Continue</);
   assert.match(chapter, /suLinkContinue"\)\?\.addEventListener\("click", \(\) => advanceFirstRelayChapter\(stageAfterFirstLink\(\)\)\)/);
-  assert.match(chapter, /if \(chapter\.stage === "slack"\) \{ renderSlackOnboarding\(chapter\); return; \}\s*renderFirstRelayFinish\(chapter\);\s*\}/, "the chapter ends after Slack");
+  assert.match(chapter, /return;\s*\}\s*renderFirstRelayFinish\(chapter\);\s*\}/, "the chapter ends after the link");
+  assert.doesNotMatch(chapter, /renderSlackOnboarding|stage === "slack"/);
   // The end saves both chapters by itself, once, and offers Try again on a failure.
   assert.match(chapter, /if \(!chapter\.finishStarted\) \{ chapter\.finishStarted = true; setTimeout\(\(\) => \{ void finishNetworkInvitation\(\); \}, 0\); \}/);
   assert.match(chapter, /id="suFinishRetry" type="button"[^>]*>Try again</);

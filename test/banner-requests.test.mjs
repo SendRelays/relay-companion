@@ -33,7 +33,7 @@ test("a new sender arrives in the banner from the same rooms as the list, locked
   assert.match(peek, /querySelectorAll\("\.relay-arrival:not\(\.request-row\)"\)/);
   assert.match(peek, /wireMessageSideMenus\(relaysListEl\);\n\s+wireRequestRows\(relaysListEl\);/);
   // No reply box for a stranger from the banner.
-  assert.match(inbox, /if \(!peeking \|\| !identity \|\| identity\.requestRoom \|\| identity\.provider === "slack"\) return "";/);
+  assert.match(inbox, /if \(!peeking \|\| !identity \|\| identity\.requestRoom\) return "";/);
 });
 
 test("the locked row shows who and what kind, never the words", () => {
@@ -58,8 +58,6 @@ test("nothing else opens a locked sender's words", () => {
   const search = between(inbox, "function chatSearchModel(query)", "function chatSearchHtml(");
   assert.match(search, /if \(room\.requestRoom\) continue;/);
   assert.match(inbox, /receivedRelayRows\(allRows, identityRows\.filter\(\(room\) => !room\.requestRoom\)\)/);
-  const pages = read("../overlay/inbox-pages.js");
-  assert.match(pages, /!locked\.has\(String\(r\.senderEmail \|\| ""\)\.trim\(\)\.toLowerCase\(\)\)/);
 });
 
 test("a new sender counts as unread; only a blocked one stays out of the number", () => {

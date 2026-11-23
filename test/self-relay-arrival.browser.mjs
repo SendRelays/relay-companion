@@ -34,7 +34,7 @@ try {
       window.arrival = { row, sent };
       window.fixture = { account: { paired: true, userId: "self", name: me.name, email: me.email, hasSentRelay: true },
         ui: { canDismiss: true, onboardingRequired: false, completedOnboardingVersion: 1, soundsMuted: true },
-        features: { requests: true }, requests: [], chats: [], slackChats: [], outbox: [],
+        features: { requests: true }, requests: [], chats: [], outbox: [],
         contacts: [{ id: "c_sven", name: "Sven Wellmann", email: "sven@example.com", source: "manual" }], relays: [], sent: [] };
       const api = { isTestOverlay: true, refresh: async () => structuredClone(window.fixture), refreshSent: async () => ({ items: window.fixture.sent }),
         contacts: async () => window.fixture.contacts, groups: async () => ({ ok: true, result: [] }), accountInfo: async () => window.fixture.account, agentSurfaces: async () => ({}) };

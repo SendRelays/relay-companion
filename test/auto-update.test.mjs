@@ -1249,3 +1249,39 @@ test("a launch refused because another updater holds the lock waits a minute bef
   assert.equal((await updater.tick()).status, "updating", "after a minute it asks again");
   assert.equal(launches.length, 2);
 });
+
+test("no automatic update starts while the machine is asleep, and a slept-through attempt neither counts nor delays (Sven, 2026-11)", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-asleep-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packageRoot = path.join(os.homedir(), ".relay", "runtime", "releases", "test", "node_modules", "relay-companion");
+  let asleep = true, slept = false, launches = 0, outcome = "admitted";
+  const failures = [];
+  const releasePolicy = {
+    asleep: () => asleep,
+    failure: (channel, version, options) => { failures.push(options); return { slept }; },
+    decision: () => ({ blocked: false }),
+  };
+  const build = ({ manual = false } = {}) => createAutoUpdaterImpl({
+    platform: "darwin", packageRoot, releasePolicy, now: () => 100000, useFailureBackoff: !manual,
+    getCurrentVersion: () => "1.0.0", getCurrentChannel: () => "dev",
+    getCanonicalRuntime: () => ({ packageRoot, version: "1.0.0" }), getCanonicalRuntimeState: () => null,
+    getLatestVersion: async () => "1.0.1", updateStatePath: path.join(root, "update-state.json"),
+    spawnUpdate: () => { launches++; return { status: "admitted", requestId: `r${launches}`, requestPath: "fake" }; },
+    inspectRequest: () => ({ state: outcome, result: { reason: "candidate-install-failed" } }),
+    checkIntervalMs: 0, restartCooldownMs: 0,
+  });
+  const updater = build();
+  assert.equal((await updater.tick()).status, "deferred-asleep");
+  assert.equal(launches, 0);
+  // A manual `relay update` is the person at the computer: never held.
+  assert.equal((await build({ manual: true }).tick()).status, "updating");
+  launches = 0;
+  asleep = false;
+  assert.equal((await updater.tick()).status, "updating");
+  // The machine slept through it and the worker failed.
+  outcome = "failed"; slept = true;
+  const next = await updater.tick();
+  assert.equal(failures.at(-1).since, 100000, "the failure carries the attempt's start");
+  assert.notEqual(next.status, "deferred-backoff", "a slept-through failure adds no backoff");
+  assert.equal(readUpdateFailure(path.join(root, "update-state.json")), null, "nor a persisted failure");
+});

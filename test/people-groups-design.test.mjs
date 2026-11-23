@@ -38,11 +38,7 @@ test("People rows are names A–Z with colored identity, no email, no recency, n
   assert.doesNotMatch(render, /timeAgo\(c\.updatedAt\)|const recent/);
   // Someone not on Relay yet says so, with a dashed avatar.
   assert.match(render, /cv-avatar\$\{c\.onRelay === false \? " pending" : ""\}/);
-  assert.match(render, /c\.onRelay === false && !slack \? `<span class="cv-meta">Not on Relay yet<\/span>` : ""/);
-  // A Slack teammate instead says how a Relay reaches them, under the name,
-  // in their own section below everyone on Relay (option B, 2026-10-11).
-  assert.match(render, /<span class="cv-reach">\$\{invitedToday \? "Invited · " : ""\}Relays reach them in Slack<\/span>/);
-  assert.match(html, /<span class="cv-section-label">From Slack · not on Relay yet<\/span><button class="cv-section-verb" type="button" id="cvSlackInviteAll">Invite all<\/button>/);
+  assert.match(render, /c\.onRelay === false \? `<span class="cv-meta">Not on Relay yet<\/span>` : ""/);
   assert.match(html, /\.cv-avatar\.pending \{[^}]*inset 0 0 0 1\.5px/);
   // No "· by email": there is no email door any more (Sven, 2026-09-08).
   assert.doesNotMatch(render, /cv-via|by email/);
@@ -83,7 +79,7 @@ test("Group rows are a deck (the group's square, then its people as cards), a na
   assert.match(html, /<div class="gd-identity"><span class="cvg-stack">\$\{groupAvatarStack\(g, roster\)\}<\/span>/);
   assert.doesNotMatch(rows, /class="cv-avatar sq"/, "the single square tile is now the deck's front card");
   assert.match(rows, /const others = groupOthers\(roster\);/);
-  assert.match(rows, /const sub = slack \? \(g\.lastPreview \|\| "Slack channel"\) : [^;\n]*groupMemberSummary\(/);
+  assert.match(rows, /const sub = others\.length \? [^;\n]*groupMemberSummary\(/);
   assert.match(rows, /class="cvg-sub">\$\{esc\(archived \? `Archived · \$\{sub\}` : sub\)\}/);
   assert.match(rows, /class="cvg-name">\$\{cvMarkHtml\(g\.name, cvQuery\)\}/);
   // No counts or "Added you" badge on a row.
@@ -110,8 +106,6 @@ test("Group rows are a deck (the group's square, then its people as cards), a na
   // A group of just you is its square alone.
   assert.equal(kit.groupAvatarStack({ name: "notes" }, [me]), `<span class="cv-avatar" style="--cv-h:${hue("notes")}" aria-hidden="true">N</span>`);
   assert.equal(kit.groupAvatarStack({ name: "  " }, []), `<span class="cv-avatar" style="--cv-h:${hue("  ")}" aria-hidden="true">?</span>`);
-  // Slack wears its own mark.
-  assert.equal(kit.groupAvatarStack({ name: "eng", provider: "slack" }, [sven]), '<img class="cvg-slack-logo" src="slackMark.png" alt="Slack" />');
   assert.deepEqual(kit.groupOthers([me, sven]), [sven]);
   // Signed out (no address), nobody is filtered.
   assert.deepEqual(deckKit({}).groupOthers([me, sven]), [me, sven]);
@@ -156,7 +150,6 @@ test("Group rows reserve exactly one tile's footprint before text", () => {
     const second = rule(`${scope}.cvg-stack .cv-avatar:nth-child(2)`);
     const third = rule(`${scope}.cvg-stack .cv-avatar:nth-child(3)`);
     const alone = rule(`${scope}.cvg-stack .cv-avatar:only-child`);
-    const logo = rule(`${scope}.cvg-stack .cvg-slack-logo`);
     // One square footprint: width, height and flex basis agree.
     assert.equal(px(box.width), stack);
     assert.equal(px(box.height), stack);
@@ -169,9 +162,8 @@ test("Group rows reserve exactly one tile's footprint before text", () => {
     // The last card ends exactly at the footprint's edge: nothing spills
     // into the name beside it.
     assert.equal(card + 2 * step, stack);
-    // A lone square, and Slack's mark, fill the footprint.
+    // A lone square fills the footprint.
     assert.deepEqual([px(alone.width), px(alone.height)], [stack, stack]);
-    assert.deepEqual([px(logo.width), px(logo.height)], [stack, stack]);
   };
   // The list's deck.
   const box = rule(".cvg-stack");

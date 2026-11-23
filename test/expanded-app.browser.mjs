@@ -29,9 +29,9 @@ try {
     window.fixture = {
       account:{paired:true,userId:'self',name:'Test User',email:'self@example.test',hasSentRelay:true},
       ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1},
-      features:{requests:false,todo:false,slack:false,replyThreads:true,topics:true,fullAppExpand:true},
+      features:{requests:false,todo:false,replyThreads:true,topics:true,fullAppExpand:true},
       contacts:[{contactId:'c-sven',name:'Sven Wellmann',email:'sven@example.test'},{contactId:'c-shane',name:'Shane Acton',email:'shane@example.test'},{contactId:'c-kiara',name:'Kiara Moodley',email:'kiara@example.test'},{contactId:'c-aron',name:'Aron van Ammers',email:'aron@example.test'}],
-      relays, sent:[], requests:[], chats:[], slackChats:[],
+      relays, sent:[], requests:[], chats:[],
     };
     const api = {isTestOverlay:true,refresh:async()=>structuredClone(window.fixture),refreshSent:async()=>({items:[]}),contacts:async()=>window.fixture.contacts,
       groups:async()=>({ok:true,result:[]}),accountInfo:async()=>window.fixture.account,agentSurfaces:async()=>({}),setupSnapshot:async()=>({hosts:[],scannedAt:Date.now()}),

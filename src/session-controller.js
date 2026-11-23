@@ -871,6 +871,9 @@ export async function materializeRelayOperation(client, operation, claimToken, {
   return true;
 }
 
+// Every operation kind this version can carry out (apps/api/src/services/sessions.ts).
+const KNOWN_OPERATION_KINDS = new Set(["start", "send", "transcript_read", "transcript_search", "transcript_agents"]);
+
 async function processClaim(client, claim, log) {
   const operation = claim.operation;
   // Protect every controller phase, including provider launch, native-session
@@ -882,6 +885,12 @@ async function processClaim(client, claim, log) {
   }, 10_000);
   renewTimer.unref?.();
   try {
+    // A kind a newer API adds (stop, interrupt, ...) must be refused here, not
+    // run: anything this version does not know would otherwise fall through to
+    // an AI turn and start an agent instead of, say, stopping one.
+    if (!KNOWN_OPERATION_KINDS.has(operation.kind)) {
+      throw new Error(`This version of Relay cannot run "${String(operation.kind).slice(0, 60)}" operations yet (unsupported_operation_kind). Update Relay on this computer.`);
+    }
     if (operation.kind.startsWith("transcript_")) {
       if (!claim.target) throw new Error("AI-session inspection target is unavailable");
       const output = await inspectAiSession(claim.target, operation.input || {});

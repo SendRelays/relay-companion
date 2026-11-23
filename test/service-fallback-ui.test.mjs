@@ -46,10 +46,10 @@ test("the pill judges the daemon's heartbeat on its own tick and repairs it thro
 });
 
 test("a Relay room reads the server's page of the conversation while the service is not ok, and only then", () => {
-  const helper = between(inbox, "function serviceDegraded()", "function slackMessagesVisible(");
+  const helper = between(inbox, "function serviceDegraded()", "function canonicalChatHydrationKey(");
   assert.match(helper, /daemon === "checking" \|\| daemon === "repairing" \|\| daemon === "stopped"/);
   assert.match(helper, /function serverTranscriptRoom\(room\)/);
-  assert.match(helper, /if \(!chatId \|\| isSlackIntegratedRoom\(room\)\) return false;/, "Slack rooms keep their own path");
+  assert.match(helper, /if \(!chatId\) return false;/, "a room without a chat id has no server page");
   // A room from the local store has no chat id of its own; the page is asked
   // for by one. Groups use their group id, direct rooms the server's list,
   // joined on shared wire thread ids and never on a name (the contact is
@@ -68,12 +68,12 @@ test("a Relay room reads the server's page of the conversation while the service
   assert.match(fallback, /client\.chats\(\{ surface: "relay" \}\)/);
   assert.match(fallback, /threadIds: Array\.isArray\(chat\.threadIds\)/);
   assert.doesNotMatch(fallback, /participants|lastMessage|preview/, "ids and thread ids only");
-  // Every place a Slack or direct room fetches the canonical page now admits a
+  // Every place a direct room fetches the canonical page now admits a
   // Relay room that is reading from the server.
-  assert.match(inbox, /\(!isSlackIntegratedRoom\(room\) && !resolvedDirect && !serverTranscriptRoom\(room\)\) \|\| !room\.chatId/, "the 1 s live refresh");
-  assert.match(inbox, /\(isSlackIntegratedRoom\(room\) \|\| serverTranscriptRoom\(room\)\) && room\.chatId && !options\.hydrated/, "the open-room hydration");
-  assert.match(inbox, /\(isSlackIntegratedRoom\(room\) \|\| directContactAnchorForChatId\(room\?\.chatId\) \|\| serverTranscriptRoom\(room\)\) && room\?\.chatId/, "the payload-driven refresh");
-  assert.match(inbox, /\(isSlackIntegratedRoom\(visibleRoom\) \|\| resolvedDirectAnchor \|\| serverTranscriptRoom\(visibleRoom\)\) && visibleRoom\.chatId/,
+  assert.match(inbox, /\(!resolvedDirect && !serverTranscriptRoom\(room\)\) \|\| !room\.chatId/, "the 1 s live refresh");
+  assert.match(inbox, /if \(serverTranscriptRoom\(room\) && room\.chatId && !options\.hydrated/, "the open-room hydration");
+  assert.match(inbox, /\(directContactAnchorForChatId\(room\?\.chatId\) \|\| serverTranscriptRoom\(room\)\) && room\?\.chatId/, "the payload-driven refresh");
+  assert.match(inbox, /\(resolvedDirectAnchor \|\| serverTranscriptRoom\(visibleRoom\)\) && visibleRoom\.chatId/,
     "reading the room still tells the server, so the other side gets its receipt");
 });
 
@@ -83,7 +83,6 @@ test("only the other side's rows are projected from the server page, shaped like
   assert.match(projection, /if \(msgs\.some\(\(message\) => String\(message\.id \|\| ""\) === id\)\) continue;/, "the local store wins by id once it catches up");
   assert.match(projection, /partyKey: groupName\s*\? `group:\$\{groupName\.trim\(\)\.toLowerCase\(\)\}`/, "a group row lands in the same room as its staged twin");
   assert.match(projection, /serverTranscript: true,/);
-  assert.match(projection, /if \(integration\?\.provider === "slack"\) continue;/);
 });
 
 test("the only thing ever said out loud is a repair that failed, and it is a sentence, not a button", () => {

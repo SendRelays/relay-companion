@@ -45,7 +45,7 @@ try {
       members: [{ userId: "self", name: "David Kariuki", email: "david@example.com" }, { userId: "shane", name: "Shane Acton", email: "shane@example.com" }] };
     window.fixture = { account: { paired: true, userId: "self", name: "David Kariuki", email: "david@example.com", hasSentRelay: true },
       ui: { canDismiss: true, onboardingRequired: false, completedOnboardingVersion: 1, soundsMuted: true },
-      features: { replyThreads: true }, relays, sent, requests: [], chats: [], slackChats: [], outbox: [] };
+      features: { replyThreads: true }, relays, sent, requests: [], chats: [], outbox: [] };
     window.sends = [];
     const api = { isTestOverlay: true, refresh: async () => window.fixture, refreshSent: async () => ({ items: window.fixture.sent }),
       contacts: async () => [], groups: async () => ({ ok: true, result: [group] }), accountInfo: async () => window.fixture.account, agentSurfaces: async () => ({}),

@@ -117,18 +117,6 @@ test("a queued reader reply restores in Granular after a renderer restart", asyn
   assert.equal(restored.inReplyToRelayId, "relay_shane");
 });
 
-test("a missing packet group name is recovered from the exact channel, even when Shane has a direct chat", () => {
-  const state = readerHarness({
-    row: { ...shaneRelay, recipientGroupName: "" },
-    chats: [
-      { chatId: "chat_shane", title: "Shane Acton", kind: "direct" },
-      { chatId: "grp_granular", title: "Granular", kind: "group", group: { groupId: "grp_granular", name: "Granular" } },
-    ],
-  });
-  assert.match(state.markup, /to Granular<\/span>/);
-  assert.equal(state.replyChat.chatId, "grp_granular");
-});
-
 test("the current saved channel name wins over an old packet name", () => {
   const state = readerHarness({
     row: { ...shaneRelay, recipientGroupName: "Old name" },

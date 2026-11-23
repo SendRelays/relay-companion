@@ -301,7 +301,7 @@ test("opening a canonical chat uses the accepted pill source and qualifies the v
   });
   const relay = new RelayClient({ url: `http://127.0.0.1:${address.port}`, token: "dev_test" });
 
-  await relay.markChatRead("chat code", "pill-chat-read-code", "slack", { includeSlack: true });
+  await relay.markChatRead("chat code", "pill-chat-read-code");
 
   assert.deepEqual(request, {
     method: "POST",
@@ -309,8 +309,7 @@ test("opening a canonical chat uses the accepted pill source and qualifies the v
     body: {
       source: "relay_pill_open",
       idempotencyKey: "pill-chat-read-code",
-      surface: "slack",
-      includeSlack: true,
+      surface: "relay",
     },
   });
 });
@@ -407,4 +406,31 @@ test("a moved share chat reaches the caller with the id it moved to", async (t) 
   assert.equal(err.body.error, "chat_moved");
   assert.equal(err.body.chatId, "chat_0123456789abcdef01234567");
   assert.equal(err.message, "That conversation moved when the recipient claimed the link.");
+});
+
+test("an HTML error page from the proxy surfaces as an HTTP error with its status, not a SyntaxError", async (t) => {
+  const server = http.createServer((req, res) => {
+    if (req.url.startsWith("/v1/me")) {
+      res.statusCode = 502;
+      res.setHeader("content-type", "text/html");
+      res.end("<html><body><h1>502 Bad Gateway</h1></body></html>");
+      return;
+    }
+    res.statusCode = 200;
+    res.setHeader("content-type", "text/html");
+    res.end("<html>ok</html>");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await closeRelayConnections(); await new Promise((resolve) => server.close(resolve)); });
+  const relay = new RelayClient({ url: `http://127.0.0.1:${server.address().port}`, token: "fixture" });
+  const error = await relay.me().then(() => null, (e) => e);
+  assert.ok(error, "the request fails");
+  assert.notEqual(error.name, "SyntaxError");
+  assert.equal(error.status, 502);
+  assert.equal(error.code, "non_json_response");
+  assert.deepEqual(error.body, {});
+  // A 2xx that is not JSON also fails with its status, never a SyntaxError.
+  const okButHtml = await relay.waitForAccountChange().then(() => null, (e) => e);
+  assert.equal(okButHtml?.status, 200);
+  assert.equal(okButHtml?.code, "non_json_response");
 });

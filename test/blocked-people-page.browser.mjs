@@ -16,7 +16,7 @@ try {
     window.fixtureWrites = [];
     window.fixtureReadMode = 'normal';
     window.fixtureUnblockMode = 'normal';
-    window.fixturePayload = { account:{paired:true,userId:'usr_self',name:'Preview Person',email:'preview@example.com',hasSentRelay:true},ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1},features:{},relays:[],sent:[],requests:[],chats:[],slackChats:[] };
+    window.fixturePayload = { account:{paired:true,userId:'usr_self',name:'Preview Person',email:'preview@example.com',hasSentRelay:true},ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1},features:{},relays:[],sent:[],requests:[],chats:[] };
     const api = {
       isTestOverlay:true,
       refresh:async()=>structuredClone(window.fixturePayload),

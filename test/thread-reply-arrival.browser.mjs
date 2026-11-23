@@ -23,7 +23,7 @@ try {
       senderName: name, senderEmail: `${name.split(" ")[0].toLowerCase()}@example.com`, ...room, createdAt: ago(minutes), state: "read", unread: false, source: pill });
     window.fixture = { account: { paired: true, userId: "self", name: "David Kariuki", email: "david@example.com", hasSentRelay: true },
       ui: { canDismiss: true, onboardingRequired: false, completedOnboardingVersion: 1, soundsMuted: true },
-      features: { replyThreads: true }, requests: [], chats: [], slackChats: [], outbox: [],
+      features: { replyThreads: true }, requests: [], chats: [], outbox: [],
       relays: [said("relay_morning", "Sven Wellmann", "Morning", 90), said("relay_green", "Sven Wellmann", "Deploy is green", 40), said("relay_merge", "Shane Acton", "Merging the share fix next", 30)],
       sent: [{ relayId: "relay_question", threadId: "t_q", kind: "message", title: "Thoughts on expanded mode?", forHuman: "What do you think?", forAgent: "Detail.",
         recipient: { name: "Granular" }, state: "delivered", ...room, groupSendId: "gsend_q", createdAt: ago(65), updatedAt: ago(65), source: pill }] };

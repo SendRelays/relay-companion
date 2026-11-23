@@ -98,7 +98,7 @@ function renderer() {
     payload: {},
     settleTaskLocalState: () => {},
   });
-  vm.runInContext(section("  function acceptOutboxReceipt(", "  function activeSlackRoomRecoveryMatches("), context);
+  vm.runInContext(section("  function acceptOutboxReceipt(", "  function beginThreadComposerEntryFocus("), context);
   vm.runInContext(section("  function syncOutboxProjection()", "  // The room composer is wired ONCE"), context);
   // Run the real payload admission guard, then the real queue projection. The
   // remainder of onPayload draws unrelated surfaces and is outside this race.
@@ -147,7 +147,7 @@ function composer({ files = [], prepare = async () => ({ files: [], attachments:
     threadEditTargets: new Map(), edits, doThEditSave: () => { edits.push(input.value); },
     threadStateKey: "room", thReplySending: false, thQrInput: input, thQrSend: {},
     thread: { ...address, msgs: [] }, chatRoom: null, addressAnchor: address,
-    messageById: new Map(), focusedSlackParent: null, focusedReplyRoot: null, threadDetailFollowSendFor: null,
+    messageById: new Map(), focusedReplyRoot: null, threadDetailFollowSendFor: null,
     payload: { features: {} }, crypto: { randomUUID: () => `uuid-${calls.length}` },
     peekStagedFiles: () => files, takeStagedFiles() {}, stageFileList() {},
     composerFilePayloads: prepare, setRowNote() {}, renderThreadDetail() {},
@@ -157,8 +157,7 @@ function composer({ files = [], prepare = async () => ({ files: [], attachments:
       return send ? send(request) : Promise.resolve({ ok: true, outboxRevision: calls.length, entry: { id: request.idempotencyKey } });
     } } },
   });
-  vm.runInContext(section("  function acceptOutboxReceipt(", "  function activeSlackRoomRecoveryMatches("), c);
-  vm.runInContext(section("  function isSlackIntegratedRoom(room)", "  // The background service stages"), c);
+  vm.runInContext(section("  function acceptOutboxReceipt(", "  function beginThreadComposerEntryFocus("), c);
   vm.runInContext(section("  function groupRoomRecipient(room)", "  // Any other room addresses"), c);
   vm.runInContext(`${section("      const doThReply = async () => {", "      threadComposerSend = doThReply;")}
     globalThis.send = doThReply;`, c);

@@ -183,9 +183,6 @@ contextBridge.exposeInMainWorld("relay", {
   openTask: (taskId) => ipcRenderer.send("relay:openTask", taskId),
   taskStatus: (taskId) => ipcRenderer.invoke("relay:taskStatus", taskId),
 
-  googleContactsStatus: () => ipcRenderer.invoke("relay:googleContactsStatus"),
-  googleContactsSync: () => ipcRenderer.invoke("relay:googleContactsSync"),
-  googleContactsConnect: () => ipcRenderer.invoke("relay:googleContactsConnect"),
   // contacts
   capabilities: () => ipcRenderer.invoke("relay:capabilities"),
   contacts: () => ipcRenderer.invoke("relay:contacts"),
@@ -193,20 +190,12 @@ contextBridge.exposeInMainWorld("relay", {
   // Resolve a contact's canonical conversation for the pill's chat surface.
   openChatWith: (email, name) =>
     ipcRenderer.invoke("relay:openChatWith", { email: String(email || ""), name: String(name || "") }),
-  canonicalChat: (chatId, options = {}) => ipcRenderer.invoke("relay:canonicalChat", {
-    chatId: String(chatId || ""),
-    surface: options && options.surface === "slack" ? "slack" : "relay",
-    includeSlack: Boolean(options && options.includeSlack),
-  }),
+  canonicalChat: (chatId) => ipcRenderer.invoke("relay:canonicalChat", { chatId: String(chatId || "") }),
   typingContext: (input) => ipcRenderer.invoke("relay:typingContext", input),
   chatTyping: (chatId) => ipcRenderer.invoke("relay:chatTyping", String(chatId || "")),
   setChatTyping: (input) => ipcRenderer.invoke("relay:setChatTyping", input),
   mentionVisit: (chatId, visitId) => ipcRenderer.invoke("relay:mentionVisit", { chatId: String(chatId || ""), visitId: String(visitId || "") }),
-  canonicalChatRead: (chatId, options = {}) => ipcRenderer.invoke("relay:canonicalChatRead", {
-    chatId: String(chatId || ""),
-    surface: options && options.surface === "slack" ? "slack" : "relay",
-    includeSlack: Boolean(options && options.includeSlack),
-  }),
+  canonicalChatRead: (chatId) => ipcRenderer.invoke("relay:canonicalChatRead", { chatId: String(chatId || "") }),
   // contact groups (saved rosters; a group relays to every member as one thread)
   groups: () => ipcRenderer.invoke("relay:groups"),
   groupCreate: (name) => ipcRenderer.invoke("relay:groupCreate", name),
@@ -225,18 +214,7 @@ contextBridge.exposeInMainWorld("relay", {
 
   // settings / account (switch + sign-out relaunch the pill on success)
   accountInfo: () => ipcRenderer.invoke("relay:accountInfo"),
-  slackConnection: () => ipcRenderer.invoke("relay:slackConnection"),
-  slackConnect: (input = {}) => ipcRenderer.invoke("relay:slackConnect", input || {}),
-  slackDisconnect: () => ipcRenderer.invoke("relay:slackDisconnect"),
-  slackConnectCancel: () => ipcRenderer.invoke("relay:slackConnectCancel"),
   setAccountName: (name) => ipcRenderer.invoke("relay:setAccountName", { name: String(name || "") }),
-  slackContactInvite: (contactId) => ipcRenderer.invoke("relay:slackContactInvite", { contactId: contactId ? String(contactId) : "" }),
-  slackInvite: (chatId, slackUserId) => ipcRenderer.invoke("relay:slackInvite", { chatId: String(chatId || ""), slackUserId: slackUserId ? String(slackUserId) : "" }),
-  onSlackConnection: (callback) => {
-    const listener = (_event, info) => callback(info);
-    ipcRenderer.on("slackConnection", listener);
-    return () => ipcRenderer.removeListener("slackConnection", listener);
-  },
   credentialRetry: () => ipcRenderer.invoke("relay:credentialRetry"),
   chatAgentPreferences: () => ipcRenderer.invoke("relay:chatAgentPreferences"),
   saveChatAgentPreferences: (input) => ipcRenderer.invoke("relay:chatAgentPreferencesSave", input || {}),
@@ -344,6 +322,9 @@ contextBridge.exposeInMainWorld("relay", {
   cardResizing: (on) => ipcRenderer.send("relay:cardResizing", Boolean(on)),
   soundBytes: (name) => ipcRenderer.invoke("relay:soundBytes", name),
 
+  // The full app's −: minimise it to the Dock or taskbar. Resolves false when
+  // the card is not the full app.
+  minimizeApp: () => ipcRenderer.invoke("relay:minimizeApp"),
   // dismissal (the card's ✕ / the status-area mark / ghost notifications)
   dismiss: () => ipcRenderer.send("relay:dismiss"),
   undismiss: () => ipcRenderer.send("relay:undismiss"),

@@ -18,11 +18,11 @@ try {
     window.fixture = {
       account:{paired:true,userId:"self",name:"Test User",email:"self@example.test",hasSentRelay:true},
       ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1},
-      features:{requests:false,slack:false,smartTips:true},
+      features:{requests:false,smartTips:true},
       usage:{sentWithAttachments:false,receivedWithAttachments:false,openedReceivedAttachments:false,createdShareLink:true,
         examples:{unopenedFrom:"Dylan Maltman"}},
       relays:[{id:"from-jonty",threadId:"jonty-room",direction:"inbound",state:"read",relayNotificationKind:"plain_relay",senderName:"Jonty Quenet",senderEmail:"jonty@example.test",title:"Pricing",forHuman:"Hello",createdAt:new Date().toISOString(),attachments:[]}],
-      contacts:[],sent:[],requests:[],chats:[],slackChats:[],
+      contacts:[],sent:[],requests:[],chats:[],
     };
     const api = {
       isTestOverlay:true,
@@ -112,13 +112,13 @@ try {
   assert.equal(await page.locator("#relayAnyoneTip").isVisible(), false, "nothing left, no card");
 
   // Without the developer gate the person keeps the fixed five, whatever they have done.
-  await push({features:{requests:false,slack:false,smartTips:false}});
+  await push({features:{requests:false,smartTips:false}});
   assert.equal(await page.locator("#relayAnyoneTip").isVisible(), true);
   assert.equal(await title(), TITLE);
   assert.deepEqual(await wayNames(), EXAMPLES.map((example) => example.way));
 
   // The smart card's own ways report engagement like the fixed ones.
-  await push({features:{requests:false,slack:false,smartTips:true}, usage:{...everything, sentTask:false, forwarded:false}});
+  await push({features:{requests:false,smartTips:true}, usage:{...everything, sentTask:false, forwarded:false}});
   await page.locator(".rat-summary").click();
   await page.getByRole("button", {name:"Example 2 of 2",exact:true}).click();
   const chosen = await page.evaluate(() => window.teaching.filter(([name]) => name === "example_chosen").at(-1));

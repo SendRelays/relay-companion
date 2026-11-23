@@ -52,7 +52,7 @@ try {
     for (const row of [...relays, ...sent]) Object.assign(row, { recipientGroupId: group.id, recipientGroupName: group.name });
     window.fixture = { account: { paired: true, userId: "self", name: "Shane", email: "shane@example.com", hasSentRelay: true },
       ui: { canDismiss: true, onboardingRequired: false, completedOnboardingVersion: 1, soundsMuted: true },
-      features: { replyThreads: true, peopleMentions: true }, relays, sent, requests: [], chats: [], slackChats: [], outbox: [] };
+      features: { replyThreads: true, peopleMentions: true }, relays, sent, requests: [], chats: [], outbox: [] };
     window.sends = [];
     window.acks = [];
     window.reacts = [];

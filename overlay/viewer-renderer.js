@@ -320,10 +320,10 @@
   // picture inside symmetric padding, so its resting centre is the stage's.
   function clampZoom() {
     const stage = el.stage.getBoundingClientRect();
-    const slackX = Math.max(0, (el.image.offsetWidth * zoom.scale - stage.width) / 2);
-    const slackY = Math.max(0, (el.image.offsetHeight * zoom.scale - stage.height) / 2);
-    zoom.x = Math.max(-slackX, Math.min(slackX, zoom.x));
-    zoom.y = Math.max(-slackY, Math.min(slackY, zoom.y));
+    const spareX = Math.max(0, (el.image.offsetWidth * zoom.scale - stage.width) / 2);
+    const spareY = Math.max(0, (el.image.offsetHeight * zoom.scale - stage.height) / 2);
+    zoom.x = Math.max(-spareX, Math.min(spareX, zoom.x));
+    zoom.y = Math.max(-spareY, Math.min(spareY, zoom.y));
   }
 
   function paintZoom({ glide = false } = {}) {

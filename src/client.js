@@ -336,7 +336,22 @@ export class RelayClient {
         const bodyAt = performance.now();
         const text = await res.text();
         const parseAt = performance.now();
-        const data = text ? JSON.parse(text) : {};
+        // An error page from the proxy in front of the API (an HTML 502/503/504
+        // during a deploy or an outage) is not JSON. It must surface as an HTTP
+        // error with its status, never as a SyntaxError: a SyntaxError reads as a
+        // bug in this release, which crashes the daemon and gets the release
+        // rolled back for what was only a short outage.
+        let data;
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch {
+          const err = new Error(res.ok ? `Relay answered HTTP ${res.status} with a body that is not JSON` : `Relay is unavailable right now (HTTP ${res.status})`);
+          err.status = res.status;
+          err.code = "non_json_response";
+          err.body = {};
+          throw err;
+        }
+        if (!data || typeof data !== "object") data = { value: data };
         recordReadTiming({ phase: "http", attempt: attempts, status: res.status, headersMs,
           bodyMs: Math.round(parseAt - bodyAt), parseMs: Math.round(performance.now() - parseAt),
           serverMs: Number(res.headers.get("x-relay-read-ms")) || undefined,
@@ -475,11 +490,6 @@ export class RelayClient {
 
   getSessionOperation(operationId) {
     return this.#req("GET", `/v1/session-operations/${encodeURIComponent(operationId)}`);
-  }
-
-  /** Slack card clicks (Open Relay, Open in Conductor) this account made in the last minute; each is returned once. */
-  claimSlackOpenRequests() {
-    return this.#req("POST", "/v1/slack/open-requests/claim", {});
   }
 
   sessionControllerInbox() {
@@ -1020,81 +1030,31 @@ export class RelayClient {
 
   // Chats: every thread between the same set of people, merged into one
   // conversation. See apps/api/src/services/chat-identity.ts for the ontology.
-  async chats(options = {}) {
-    const explicitSurface = Boolean(options && Object.prototype.hasOwnProperty.call(options, "surface"));
-    const surface = options && options.surface === "slack" ? "slack" : "relay";
-    const relayListPath = "/v1/chats?surface=relay";
-    // Explicit surface requests are managed projections. Omitting the option
-    // preserves the legacy client shape.
-    if (explicitSurface && surface === "slack") return this.#req("GET", "/v1/chats?surface=slack");
-    return this.#req("GET", relayListPath);
+  async chats() {
+    return this.#req("GET", "/v1/chats?surface=relay");
   }
 
   async chat(chatId, options = {}, provenance = {}) {
-    const surface = options && options.surface === "slack" ? "slack" : "relay";
-    const includeSlack = options && options.includeSlack === true;
-    const managedBase = `/v1/chats/${encodeURIComponent(chatId)}`;
     const page = new URLSearchParams();
-    for (const key of ["limit", "beforeCursor", "afterCursor"]) if (options[key] !== undefined) page.set(key, String(options[key]));
+    for (const key of ["limit", "beforeCursor", "afterCursor"]) if (options && options[key] !== undefined) page.set(key, String(options[key]));
     const suffix = page.size ? `&${page}` : "";
-    const relayPath = `${managedBase}?surface=relay${suffix}`;
-    const via = provenanceOptions(provenance);
-    // Native surfaces address the managed canonical room directly.
-    if (surface === "slack") return this.#req("GET", `${managedBase}?surface=slack&includeSlack=true${suffix}`, undefined, via);
-    if (includeSlack) return this.#req("GET", `${managedBase}?surface=relay&includeSlack=true${suffix}`, undefined, via);
-    return this.#req("GET", relayPath, undefined, via);
+    return this.#req("GET", `/v1/chats/${encodeURIComponent(chatId)}?surface=relay${suffix}`, undefined, provenanceOptions(provenance));
   }
 
-  sendChatMessage(chatId, input) {
-    return this.#req("POST", `/v1/chats/${encodeURIComponent(chatId)}/messages`, input || {});
-  }
-
-  slackConnection() {
-    return this.#req("GET", "/v1/integrations/slack");
-  }
-
-  startSlackConnection(input = {}) {
-    return this.#req("POST", "/v1/integrations/slack/oauth/start", input);
-  }
-
-  reconnectSlack(input = {}) {
-    return this.#req("POST", "/v1/integrations/slack/reconnect", input);
-  }
-
-  disconnectSlack() {
-    return this.#req("POST", "/v1/integrations/slack/disconnect-user", {});
-  }
-
-  /** Invite one Slack teammate (their DM) or, with no id, the whole channel. */
   /** Set this account's own name (an email sign-up starts without one). */
   setAccountName(name) {
     return this.#req("POST", "/v1/me/name", { name });
-  }
-
-  /** What Slack teammates not on Relay yet answered, in Slack, under Relays you sent them. */
-  slackTeammateReplies() {
-    return this.#req("GET", "/v1/slack/teammate-replies");
-  }
-
-  /** Invite Slack teammates from Contacts: one contact, or everyone not invited today. */
-  inviteSlackContacts(contactId) {
-    return this.#req("POST", "/v1/contacts/slack-invite", contactId ? { contactId } : {});
-  }
-
-  inviteSlackTeammates(chatId, slackUserId) {
-    return this.#req("POST", `/v1/chats/${encodeURIComponent(chatId)}/slack-invite`, slackUserId ? { slackUserId } : {});
   }
 
   openMentionVisit(chatId, visitId) {
     return this.#req("POST", `/v1/chats/${encodeURIComponent(chatId)}/mention-visit`, { visitId });
   }
 
-  markChatRead(chatId, idempotencyKey, surface = "relay", options = {}) {
+  markChatRead(chatId, idempotencyKey) {
     return this.#req("POST", `/v1/chats/${encodeURIComponent(chatId)}/read`, {
       source: "relay_pill_open",
       idempotencyKey: String(idempotencyKey || `chat-read-${chatId}`),
-      surface: surface === "slack" ? "slack" : "relay",
-      includeSlack: Boolean(options && options.includeSlack),
+      surface: "relay",
     });
   }
 
@@ -1135,10 +1095,6 @@ export class RelayClient {
   chatForGroup(groupId) {
     return this.#req("POST", "/v1/chats/resolve", { groupId: String(groupId || "") });
   }
-
-  googleContactsStatus() { return this.#req("GET", "/v1/google-contacts/status"); }
-
-  syncGoogleContacts() { return this.#req("POST", "/v1/google-contacts/sync", {}); }
 
   searchContacts(q) {
     return this.#req("GET", `/v1/contacts/search?q=${encodeURIComponent(q)}`);

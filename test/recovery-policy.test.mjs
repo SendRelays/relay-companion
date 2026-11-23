@@ -104,3 +104,45 @@ test("a reversed clock anchors a bounded cooldown instead of moving its deadline
   f.advance(RELEASE_COOLDOWN_MS);
   assert.equal(f.policy.decision("stable", "2.0.0").blocked, false);
 });
+
+// Sven's Mac, 2026-11: away for a weekend with the lid closed, it failed
+// 0.1.643 seven times during minute-long wakes and then refused it for 24
+// hours once he was back. A failure the machine slept through is kept for the
+// record but never counts towards the pause.
+test("a failed release the machine slept through is recorded but never pauses the release", t => {
+  const f = fixture(t);
+  f.advance(Date.parse("2026-11-22T15:00:00Z"));
+  let power = { state: "brief-wakes" };
+  const policy = recoveryPolicy({ root: f.root, now: f.now, power: () => power });
+  assert.equal(policy.asleep(), true);
+  for (let i = 0; i < 7; i++) assert.deepEqual(policy.failure("dev", "1.0.1", { id: `asleep-${i}`, reason: "candidate-install-failed" }), { slept: true });
+  assert.equal(policy.decision("dev", "1.0.1").blocked, false, "seven slept-through failures do not pause the release");
+  // Awake, but the attempt began before the last wake: it slept through part of it.
+  power = { state: "awake", lastWakeAt: new Date(f.now() - 60_000).toISOString() };
+  assert.equal(policy.asleep(), false);
+  assert.equal(policy.failure("dev", "1.0.1", { id: "spanned-sleep", since: f.now() - 10 * 60_000 }).slept, true);
+  assert.equal(policy.decision("dev", "1.0.1").blocked, false);
+  // An attempt that started after the wake and failed while awake counts as before.
+  assert.equal(policy.failure("dev", "1.0.1", { id: "awake", since: f.now() - 30_000 }).slept, false);
+  assert.equal(policy.decision("dev", "1.0.1").blocked, true);
+  assert.equal(policy.decision("dev", "1.0.1").failures, 1);
+});
+
+test("the recovery runner downloads nothing while the machine is asleep, and a slept-through run does not count", async t => {
+  const f = fixture(t);
+  let power = { state: "resuming" }, downloads = 0;
+  const policy = recoveryPolicy({ root: f.root, now: f.now, power: () => power });
+  write(f.pointer, f.current);
+  for (let i = 0; i <= 3; i++) { policy.observe("stable", f.observed); if (i < 3) f.advance(5 * 60000); }
+  write(path.join(f.root, "daemon.json"), { version: "1.0.0", at: f.now() });
+  const options = { ...f.options, policyFactory: () => policy, memory: () => ({ pressured: false }), health: () => ({ ok: true }),
+    verifyReady: async () => f.observed, stage: async () => { downloads++; power = { state: "brief-wakes" }; throw Error("download-timed-out"); } };
+  assert.equal((await recover(options)).status, "deferred-asleep");
+  assert.equal(downloads, 0);
+  power = { state: "awake" };
+  const slept = await recover(options);
+  assert.equal(downloads, 1);
+  assert.equal(slept.status, "deferred-asleep", "the machine fell asleep during the download");
+  assert.equal(slept.failures, undefined);
+  assert.equal(policy.decision("stable", "2.0.0").blocked, false);
+});

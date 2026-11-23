@@ -243,7 +243,7 @@ test("your link is offered in place for whoever is not on Relay yet", async () =
 
 test("a request is a direct Relay room from an address you do not know and never wrote to", () => {
   const model = slice("const IGNORED_REQUESTS_PREF", "async function acceptRequestRoom(room)");
-  assert.match(model, /if \(!room \|\| room\.isGroup \|\| room\.provider === "slack" \|\| room\.integration\) return false;/);
+  assert.match(model, /if \(!room \|\| room\.isGroup\) return false;/);
   assert.match(model, /if \(!address \|\| known\.has\(address\)\) return false;/);
   assert.match(model, /\.some\(\(message\) => message\.direction === "out"\)\) return false;/, "writing to someone makes them a conversation");
   // Known = your Contacts, you, and everyone you have sent to.
@@ -316,7 +316,6 @@ test("delivery-created contacts remain requests until accepted or sent to", () =
   }
   stranger.source = "inbound";
   assert.equal(api.isRequestRoom({ ...room, isGroup: true }), false);
-  assert.equal(api.isRequestRoom({ ...room, provider: "slack" }), false);
   assert.equal(api.isRequestRoom({ partyKey: "email:me@example.test" }), false);
 });
 

@@ -23,8 +23,8 @@
 // The rule is the direction of the change. An agent can always make agents
 // do less; it cannot give agents more freedom on its own, because the tool
 // cannot tell the person's request from text the agent read in a received
-// Relay, a web page or a file. Account, sign-in and Slack connections are the
-// person's to change in the pill.
+// Relay, a web page or a file. Account and sign-in are the person's to change
+// in the pill.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -42,7 +42,26 @@ function settingsPath(options = {}) {
 
 function readStore(options = {}) {
   try {
-    const value = JSON.parse(fs.readFileSync(settingsPath(options), "utf8"));
+    return readStoreForWrite(options);
+  } catch {
+    return {};
+  }
+}
+
+// For a write: only a missing or corrupt file reads as empty. A file that
+// exists but cannot be read just now (locked by antivirus or a sync tool on
+// Windows) throws, so the write is skipped instead of replacing every setting
+// with defaults.
+function readStoreForWrite(options = {}) {
+  let text;
+  try {
+    text = fs.readFileSync(settingsPath(options), "utf8");
+  } catch (error) {
+    if (error && error.code === "ENOENT") return {};
+    throw error;
+  }
+  try {
+    const value = JSON.parse(text);
     return value && typeof value === "object" && !Array.isArray(value) ? value : {};
   } catch {
     return {};
@@ -51,9 +70,10 @@ function readStore(options = {}) {
 
 /** Re-read, change, write. `change` edits its argument in place. */
 function updateStore(change, options = {}) {
-  const next = readStore(options);
+  const next = readStoreForWrite(options);
   change(next);
-  next.schemaVersion = SCHEMA_VERSION;
+  // Never write a newer version's schema number back down.
+  next.schemaVersion = Math.max(SCHEMA_VERSION, Number.isInteger(next.schemaVersion) ? next.schemaVersion : 0);
   next.updatedAt = new Date().toISOString();
   atomicWriteJsonSync(settingsPath(options), next, { mode: 0o600 });
   return next;
@@ -138,8 +158,14 @@ function savePillChoices(accountKey, patch = {}, options = {}) {
       store.taskPermissions = permissions;
     }
     const accountPatch = {};
-    if (Array.isArray(patch.agentApps)) accountPatch.agentApps = AGENT_APPS.filter((app) => patch.agentApps.includes(app));
-    if (Array.isArray(patch.chatApps)) accountPatch.chatApps = CHAT_APPS.filter((app) => patch.chatApps.includes(app));
+    // The pill only shows the apps this version knows, so an app a newer
+    // version switched on stays as it was rather than being dropped.
+    const keepUnknown = (key, known) => {
+      const stored = accountSettings(store, accountKey)[key];
+      return Array.isArray(stored) ? stored.filter((app) => typeof app === "string" && !known.includes(app)) : [];
+    };
+    if (Array.isArray(patch.agentApps)) accountPatch.agentApps = [...AGENT_APPS.filter((app) => patch.agentApps.includes(app)), ...keepUnknown("agentApps", AGENT_APPS)];
+    if (Array.isArray(patch.chatApps)) accountPatch.chatApps = [...CHAT_APPS.filter((app) => patch.chatApps.includes(app)), ...keepUnknown("chatApps", CHAT_APPS)];
     if (typeof patch.conductor === "boolean") accountPatch.conductor = patch.conductor;
     // The first-run tutorial, finished or skipped: it never starts again for this account.
     if (FIRST_RELAY_TUTORIAL_RESULTS.includes(patch.firstRelayTutorial)) accountPatch.firstRelayTutorial = patch.firstRelayTutorial;
@@ -359,7 +385,6 @@ const SETTINGS = [
   chatAgentField("codex", "model"),
   chatAgentField("codex", "effort"),
   pillOnly({ id: "account", label: "Relay account", where: "You › Relay account", description: "Sign out, switch account, or open account settings on the web." }),
-  pillOnly({ id: "slack", label: "Slack", where: "You › Slack", description: "Connect or disconnect Slack.", available: (ctx) => ctx.features?.slack === true }),
   pillOnly({ id: "blocked_contacts", label: "Blocked people", where: "You › Blocked people", description: "Block or unblock people." }),
 ];
 const BY_ID = new Map(SETTINGS.map((setting) => [setting.id, setting]));

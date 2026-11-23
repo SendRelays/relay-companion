@@ -47,7 +47,7 @@ test("banner verbs: one Open for the likeliest app then Copy on a relay, Copy al
   // Row recipe: the first verb wears the accent, the rest are muted; the strip never bubbles to the row.
   assert.match(verbs, /class="act-btn \$\{index === 0 \? "accept" : "decline"\}"/);
   assert.match(verbs, /<span class="rk-actions" data-stop="1">/);
-  // Outbound rows and non-Relay rooms (Slack) get no verbs.
+  // Outbound rows and non-Relay rows get no verbs.
   assert.match(verbs, /row\.direction === "out" \|\| !String\(row\.id \|\| ""\)\.startsWith\("relay_"\)/);
 });
 
@@ -56,7 +56,7 @@ test("the identity row grows the kind chip (Task, Relay or Text) and the verbs o
   assert.match(row, /\$\{peeking \? bannerVerbsHtml\(row\) : ""\}/);
   // The row's message is a room projection whose Task flag is `request` (the bubble's own predicate).
   assert.match(verbs, /function bannerIsTask\(row\)[\s\S]*?row\.request \|\| isTaskRow\(relayById\(row\.id\)\) \|\| isTaskRow\(row\)/);
-  // Shane, 2026-10-19: every Relay banner names its kind; Slack rows wear none.
+  // Shane, 2026-10-19: every Relay banner names its kind.
   assert.match(verbs, /function bannerKindChipHtml\(row\) \{\n\s+if \(!row \|\| !String\(row\.id \|\| ""\)\.startsWith\("relay_"\)\) return "";\n\s+return `<span class="kchip">\$\{bannerIsTask\(row\) \? "Task" : row\.textLike \? "Text" : "Relay"\}<\/span>`;/);
   // The chip sits between the name and the time, as it does on the room bubble's top line.
   assert.ok(row.indexOf("bannerKindChipHtml(row)") < row.indexOf('<span class="th-time">'));
@@ -103,7 +103,7 @@ test("the room's composer sits under the row from the start, and only while peek
   // Right after the verbs, inside the row body, on the same peeking condition.
   assert.match(row, /\$\{peeking \? bannerVerbsHtml\(row\) : ""\}\n\s+\$\{peeking \? bannerComposerHtml\(identity, row, inThread\) : ""\}/);
   const composer = between(inbox, "function bannerComposerHtml(identity, row, inThread = false)", "function groupRoomRecipient(room)");
-  assert.match(composer, /if \(!peeking \|\| !identity \|\| identity\.requestRoom \|\| identity\.provider === "slack"\) return "";/);
+  assert.match(composer, /if \(!peeking \|\| !identity \|\| identity\.requestRoom\) return "";/);
   // Only a text gets a reply box on its banner (Shane, 2026-10-19).
   assert.match(composer, /if \(!row\.textLike\) return "";/);
   // The room composer's own box: .qr.th-qr.col, the rich field, the rail, the

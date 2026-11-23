@@ -80,7 +80,7 @@ test("Your invite link is on the page with Copy, and nothing more to read", () =
   assert.match(slice("function renderSettings()", "function wireSettings()"), /copyLink\.addEventListener\("click", \(e\) => \{ e\.stopPropagation\(\); copyInviteLinkFromSettings\(\); \}\)/);
   // The renderer never mints or copies the link itself: main does both, so
   // the account token that mints it never reaches this process.
-  const copy = slice("async function copyInviteLinkFromSettings()", "function slackSettingsHtml(info)");
+  const copy = slice("async function copyInviteLinkFromSettings()", "function renderSettings()");
   assert.match(copy, /await window\.relay\.copyOnboardingInviteLink\(\)/);
   assert.doesNotMatch(copy, /navigator\.clipboard/);
   const load = slice("async function loadSettings()", "// Provider state is live product state");
@@ -90,11 +90,10 @@ test("Your invite link is on the page with Copy, and nothing more to read", () =
 
 test("the You page reads: you, what Relay connects to, your link, preferences, then the account", () => {
   const settings = slice("function renderSettings()", "function wireSettings()");
-  // Slack sits beside Your AIs (David, 2026-10-07): the two things Relay
-  // connects to come first, then the link, the preferences card, and the
+  // Your AIs comes first, then the link, the preferences card, and the
   // Blocked people + Account card (Sven's cut, 2026-10-08). The gated
   // extras keep their place after it.
-  const order = ['<div class="sv-profile">', "setupEntryHtml()", "slackSettingsHtml(info)", "yourLinkHtml()", "quietPrefsHtml(info)", "milestoneRelaysHtml(info)", "blockedPeopleHtml()", "accountRowHtml()", "sv-colophon"]
+  const order = ['<div class="sv-profile">', "setupEntryHtml()", "yourLinkHtml()", "quietPrefsHtml(info)", "milestoneRelaysHtml(info)", "blockedPeopleHtml()", "accountRowHtml()", "sv-colophon"]
     .map((marker) => settings.indexOf(marker));
   assert.ok(order.every((index) => index >= 0), order);
   assert.deepEqual([...order].sort((a, b) => a - b), order);

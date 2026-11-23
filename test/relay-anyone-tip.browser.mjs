@@ -23,9 +23,9 @@ try {
     window.fixture = {
       account:{paired:true,userId:"self",name:"Test User",email:"self@example.test",hasSentRelay:true},
       ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1},
-      features:{requests:false,todo:false,slack:false},
+      features:{requests:false,todo:false},
       relays:[{id:"stranger",threadId:"new-room",direction:"inbound",state:"read",relayNotificationKind:"plain_relay",senderName:"New sender",senderEmail:"new@example.test",title:"A request",forHuman:"Hello",createdAt:at,attachments:[]}],
-      contacts:[],sent:[],requests:[],chats:[],slackChats:[],
+      contacts:[],sent:[],requests:[],chats:[],
     };
     const api = {
       isTestOverlay:true,

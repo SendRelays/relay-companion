@@ -27,7 +27,7 @@ try {
     const payload = {
       account:{ paired:true, userId:'self', name:'Test User', email:'self@example.com', hasSentRelay:true },
       ui:{ canDismiss:true, onboardingRequired:false, completedOnboardingVersion:1 },
-      features:{ messageMutations:true }, relays:[], sent, requests:[], chats:[], slackChats:[],
+      features:{ messageMutations:true }, relays:[], sent, requests:[], chats:[],
     };
     const api = {
       isTestOverlay:true, refresh:async () => payload, refreshSent:async () => ({ items:sent }),

@@ -276,8 +276,10 @@ export async function runCanonicalUpdateTransaction({
     component: "updater", attemptId: releaseFailureId, parentAttemptId: process.env.RELAY_RECOVERY_RUN_ID,
     channel: releaseChannel, targetVersion: version, stage, outcome, code, elapsedMs,
   }, { homeDir, now, scope: diagnosticScope });
+  const transactionStartedAt = now();
+  // A transaction the machine slept through is recorded but does not count (recovery-policy.cjs).
   const noteReleaseFailure = reason => {
-    try { releasePolicy.failure(releaseChannel, version, { id: releaseFailureId, reason }); }
+    try { releasePolicy.failure(releaseChannel, version, { id: releaseFailureId, reason, since: transactionStartedAt }); }
     catch (error) { log(`release failure history could not be saved: ${error.message}`); }
   };
   const stage = async (name, operation) => {

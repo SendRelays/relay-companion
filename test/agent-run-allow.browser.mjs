@@ -37,7 +37,7 @@ const fixtureScript = (executionEnabled) => {
   window.fixture = { account: { paired: true, userId: "self", name: "Shane", email: "shane@example.com", hasSentRelay: true },
     ui: { canDismiss: true, onboardingRequired: false, completedOnboardingVersion: 1, soundsMuted: true },
     features: { replyThreads: true, agentMentions: true, taskExecution: true }, nativeExecutionEnabled: executionEnabled,
-    relays, sent, requests: [], chats: [], slackChats: [], outbox: [] };
+    relays, sent, requests: [], chats: [], outbox: [] };
   window.enableCalls = 0;
   const api = { isTestOverlay: true, refresh: async () => window.fixture, refreshSent: async () => ({ items: window.fixture.sent }),
     contacts: async () => [], groups: async () => ({ ok: true, result: [] }), accountInfo: async () => window.fixture.account, agentSurfaces: async () => ({}),

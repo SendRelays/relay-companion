@@ -24,7 +24,7 @@ try {
     window.payloadFixture = {
       account:{ paired:true, userId:"self", name:"Test User", email:"self@example.com", hasSentRelay:true },
       ui:{ canDismiss:true, onboardingRequired:false, completedOnboardingVersion:1 },
-      features:{}, relays:[initial], sent:[], requests:[], chats:[], slackChats:[], contacts:[],
+      features:{}, relays:[initial], sent:[], requests:[], chats:[], contacts:[],
     };
     window.arrive = (id, { groupId="grp_team", groupName="Team", unread=true } = {}) => {
       window.payloadFixture.relays.push({ ...initial, id, threadId:id,

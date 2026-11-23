@@ -25,7 +25,7 @@ try {
       createdAt:new Date(now-(32-index)*60000).toISOString(),updatedAt:new Date(now-(32-index)*60000).toISOString(),
     }));
     const group={id:"grp_granular",name:"Granular",owned:false,owner:{userId:"david",name:"David Kariuki",email:"david@example.com"},members:[{contactId:"sven",name:"Sven Wellmann",email:"sven@example.com"},{contactId:"shane",name:"Shane Acton",email:"shane@example.com"}]};
-    window.fixturePayload={ account:{paired:true,name:"Sven Wellmann",email:"sven@example.com",hasSentRelay:true},ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1},features:{peopleMentions:true},relays:relays.filter(row=>row.id!=="relay_m2"),sent:[],requests:[],chats:[],slackChats:[] };
+    window.fixturePayload={ account:{paired:true,name:"Sven Wellmann",email:"sven@example.com",hasSentRelay:true},ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1},features:{peopleMentions:true},relays:relays.filter(row=>row.id!=="relay_m2"),sent:[],requests:[],chats:[] };
     const api={
       isTestOverlay:true,
       refresh:async()=>structuredClone(window.fixturePayload),

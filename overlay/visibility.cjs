@@ -181,6 +181,28 @@ function quitRelayCommand({ platform = process.platform, uid = 501 } = {}) {
   ];
 }
 
+// The overlay-prefs.json keys this version writes. main.cjs rebuilds the file
+// from them on every write, so a key of this version's that is missing from
+// its writer is erased within seconds: any new durable pref must be listed
+// here and in writeOverlayPrefs. Keys this version does not own (written by a
+// newer pill, then rolled back) are carried over as they are, so a rollback
+// never erases a newer version's choices.
+const OWNED_OVERLAY_PREF_KEYS = new Set([
+  "dismissed", "attentionLatched", "pillHidden", "soundsMuted", "notifyStyle", "onboardingVersions",
+  "onboardingAgents", "networkOnboardingCompleted", "networkOnboardingPresented", "setupConnections",
+  "presentedRelayIds", "activeAttentionIds", "dismissSnoozedIds", "pendingAttention",
+]);
+
+/** The overlay prefs this version does not own, to carry over on every write. */
+function overlayPrefsNotOwned(source) {
+  const foreign = {};
+  if (!source || typeof source !== "object" || Array.isArray(source)) return foreign;
+  for (const [key, value] of Object.entries(source)) {
+    if (!OWNED_OVERLAY_PREF_KEYS.has(key)) foreign[key] = value;
+  }
+  return foreign;
+}
+
 module.exports = {
   quitRelayCommand,
   hostPollDelayMs,
@@ -191,4 +213,6 @@ module.exports = {
   boundedPresentedRelayIds,
   recoverInterruptedAttentionPrefs,
   restoredDismissSnooze,
+  OWNED_OVERLAY_PREF_KEYS,
+  overlayPrefsNotOwned,
 };

@@ -251,9 +251,8 @@ test("the pill draws Your AIs from that evidence, first on the You page, with th
   assert.doesNotMatch(preload, /setupRestart/);
 
   const settings = inbox.slice(inbox.indexOf("function renderSettings()"), inbox.indexOf("function wireSettings()"));
-  // Your AIs first; Slack, the other thing Relay connects to, shares its card
-  // right after it, and the invite link follows that card.
-  assert.match(settings, /const connections = `\$\{window\.relay\.setupSnapshot \? setupEntryHtml\(\) : ""\}\$\{slackSettingsHtml\(info\)\}`;\s*if \(connections\) html \+= `<div class="sv-group" data-stop="1"><div class="sv-open-list">\$\{connections\}<\/div><\/div>`;\s*html \+= yourLinkHtml\(\);/);
+  // Your AIs first, and the invite link follows that card.
+  assert.match(settings, /const connections = window\.relay\.setupSnapshot \? setupEntryHtml\(\) : "";\s*if \(connections\) html \+= `<div class="sv-group" data-stop="1"><div class="sv-open-list">\$\{connections\}<\/div><\/div>`;\s*html \+= yourLinkHtml\(\);/);
   // Nothing on You sits above that card but your name.
   assert.ok(settings.indexOf('<div class="sv-profile">') < settings.indexOf("const connections ="), "the profile heads the page");
   assert.match(settings, /if \(info\.paired\) \{\s*const connections =/, "the connections card is the paired page's first card");
@@ -264,8 +263,8 @@ test("the pill draws Your AIs from that evidence, first on the You page, with th
   assert.match(entry, /<span class="sv-row-name">Your AIs<\/span>\$\{attention \? `<span class="sv-row-sub\$\{first \? " warn" : ""\}">/);
   assert.match(entry, /\$\{!attention && shown\.length \? `<span class="setup-marks" aria-hidden="true">/);
   assert.match(entry, /<svg class="sv-row-chev"/);
-  // The inbox's one quiet word is the setup nudge; the Slack row is its sibling.
-  assert.match(inbox, /<div id="relaysIntro" hidden><div id="setupNudge"><\/div><div id="slackNudge"><\/div><div id="relayAnyoneTip" hidden><\/div><\/div>/);
+  // The inbox's one quiet word is the setup nudge.
+  assert.match(inbox, /<div id="relaysIntro" hidden><div id="setupNudge"><\/div><div id="relayAnyoneTip" hidden><\/div><\/div>/);
 
   // "Connected" only from a registered, valid entry; "working now" only from a live bridge.
   const status = inbox.slice(inbox.indexOf("function setupLocalStatus(host)"), inbox.indexOf("function setupDotHtml("));

@@ -27,10 +27,10 @@ function between(source, startMarker, endMarker) {
 function rosterHarness({ groups }) {
   const declarations = between(html, "  let groupsList = [];", "  let cvgExpandedId = null;");
   const loader = between(html, "  // Resolves true when the roster arrived.", "  // ---- room-level group info");
-  const calls = { groups: 0, renderGroups: 0, sync: 0 };
+  const calls = { groups: 0, renderGroups: 0 };
   const clock = { now: 1_000_000 };
   const env = new Function(
-    "Date", "window", "cvgCall", "syncSlackChannelRows", "renderGroups",
+    "Date", "window", "cvgCall", "renderGroups",
     `"use strict"; ${declarations}\n${loader}\n` +
     "return { loadGroups, groupsLoadDue, state: () => ({ groupsLoaded, groupsLoading, groupsRetryAt, groupsList }), " +
     "setLoading: (value) => { groupsLoading = value; } };",
@@ -42,7 +42,6 @@ function rosterHarness({ groups }) {
       try { res = await fn(); } catch (e) { res = { ok: false, error: String(e && e.message) }; }
       return res && res.ok === true ? res.result : null;
     },
-    () => { calls.sync += 1; },
     () => { calls.renderGroups += 1; },
   );
   return { ...env, calls, clock };

@@ -42,7 +42,6 @@ function connectHarness({ history }) {
     resetAccountViewCaches: () => {},
     nativeCredentialCache: {}, STATE_PATH: '/test/state',
     sentCache: [], sentFingerprint: '', sentLoadedOnce: null, contactsCache: [], contactsFingerprint: '', contactsLoadedOnce: null,
-    canonicalChatsCache: [], slackChatsCache: [], canonicalChatsFingerprint: '', canonicalChatsLoadedOnce: null,
     onboardingAccountKey: (account) => `user:${account.userId}`, onboardingVersions: versions, COMPANION_ONBOARDING_VERSION: 2,
     signInHistoryPending: pending,
     // The setup pill (native installer) leaves the middle of the screen for
@@ -56,7 +55,7 @@ function connectHarness({ history }) {
       statuses['user:signed-in'] = history;
       calls.push('sent');
     },
-    refreshContacts: async () => {}, refreshCanonicalChats: async () => {}, pushInbox: async () => calls.push('inbox'),
+    refreshContacts: async () => {}, pushInbox: async () => calls.push('inbox'),
   });
   const connect = vm.runInContext(`(async (registration) => {${main.slice(start, end)}})`, context);
   return { calls, versions, pending, observed,

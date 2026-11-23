@@ -51,11 +51,11 @@ function fixture(now, { linkChats = true } = {}) {
   return {
     account: { paired: true, userId: "self", name: "David", email: "david@example.test", hasSentRelay: true },
     ui: { canDismiss: true, onboardingRequired: false, completedOnboardingVersion: 1 },
-    features: { requests: false, todo: false, slack: false, inboxPages: true },
+    features: { requests: false, todo: false },
     contacts: [{ id: "c-sven", name: "Sven", email: "sven@example.test", emails: ["sven@example.test"], onRelay: true },
       { id: "c-agent", name: "Relay Agent", email: "agent@sendrelays.com", emails: ["agent@sendrelays.com"], onRelay: true, source: "relay" },
       { id: "c-rando", name: "Rando", email: "slm_9@guests.sendrelays.com", emails: ["slm_9@guests.sendrelays.com"], onRelay: true }],
-    relays, sent, linkChats: linkChats ? [chat] : null, requests: [], chats: [], slackChats: [],
+    relays, sent, linkChats: linkChats ? [chat] : null, requests: [], chats: [],
     settings: { accountKey: "self", agentApps: [] },
   };
 }

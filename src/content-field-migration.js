@@ -103,32 +103,64 @@ export function migratePersistedContentFields({
 } = {}) {
   if (!fs.existsSync(statePath)) return { status: "absent", migratedFiles: 0 };
 
-  const locked = withJsonLockStrict(statePath, () => {
-    const state = readJson(statePath);
-    if (state.contentFieldSchemaVersion === CONTENT_FIELD_SCHEMA_VERSION) {
-      return { status: "current", migratedFiles: 0 };
-    }
+  // This runs at every daemon start, in every Companion version, including
+  // the backup a failed update rolls back to. A file it cannot read (power
+  // loss, a full disk, antivirus) must never stop the daemon: that crash-loops
+  // the current release and its rollback target alike. Unreadable files are
+  // left exactly as they are and skipped, and the marker is only written when
+  // the state itself was read, so the sweep is tried again next start.
+  let locked;
+  try {
+    locked = withJsonLockStrict(statePath, () => {
+      let state;
+      try {
+        state = readJson(statePath);
+      } catch (error) {
+        return { status: "skipped", migratedFiles: 0, reason: `state unreadable (${error?.code || error?.name || "error"})` };
+      }
+      if (!isRecord(state)) return { status: "skipped", migratedFiles: 0, reason: "state is not an object" };
+      // At or past this version: a newer Companion has already swept these
+      // files, and its marker must not be rewritten back down.
+      if (Number(state.contentFieldSchemaVersion) >= CONTENT_FIELD_SCHEMA_VERSION) {
+        return { status: "current", migratedFiles: 0 };
+      }
 
-    let migratedFiles = 0;
-    for (const packetPath of persistedPacketPaths(state, homeDir)) {
-      if (!fs.existsSync(packetPath)) continue;
-      const packet = readJson(packetPath);
-      if (!migrateContentValue(packet)) continue;
-      writeJsonAtomic(packetPath, packet);
+      let migratedFiles = 0;
+      let skippedFiles = 0;
+      for (const packetPath of persistedPacketPaths(state, homeDir)) {
+        if (!fs.existsSync(packetPath)) continue;
+        let packet;
+        try {
+          packet = readJson(packetPath);
+        } catch {
+          skippedFiles += 1;
+          continue;
+        }
+        if (!migrateContentValue(packet)) continue;
+        writeJsonAtomic(packetPath, packet);
+        migratedFiles += 1;
+      }
+
+      migrateContentValue(state);
+      state.contentFieldSchemaVersion = CONTENT_FIELD_SCHEMA_VERSION;
+      writeJsonAtomic(statePath, state);
       migratedFiles += 1;
-    }
-
-    migrateContentValue(state);
-    state.contentFieldSchemaVersion = CONTENT_FIELD_SCHEMA_VERSION;
-    writeJsonAtomic(statePath, state);
-    migratedFiles += 1;
-    return { status: "migrated", migratedFiles };
-  });
+      return { status: "migrated", migratedFiles, skippedFiles };
+    });
+  } catch (error) {
+    log(`content-field migration skipped (${error?.code || error?.message || error})`);
+    return { status: "skipped", migratedFiles: 0, reason: String(error?.code || error?.message || error) };
+  }
 
   if (!locked.ok) {
     log(`content-field migration deferred (${locked.reason})`);
     return { status: "deferred", migratedFiles: 0, reason: locked.reason };
   }
+  if (locked.value.status === "skipped") {
+    log(`content-field migration skipped (${locked.value.reason})`);
+    return locked.value;
+  }
+  if (locked.value.skippedFiles) log(`content-field migration left ${locked.value.skippedFiles} unreadable file(s) untouched`);
   if (locked.value.status === "migrated") {
     log(`migrated ${locked.value.migratedFiles} persisted Relay content file(s) to schema ${CONTENT_FIELD_SCHEMA_VERSION}`);
   }

@@ -12,10 +12,10 @@ const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
 function harness({ failSend=false, failRefresh=false, clientMessageId }={}) {
   const calls=[];
   const result={relayId:'sent-relay',contact:{email:'new@example.com',autoCreated:true}};
-  const send = new AsyncFunction('entry','client','prepared','text','files','refreshContacts','refreshCanonicalChats',transport);
+  const send = new AsyncFunction('entry','client','prepared','text','files','refreshContacts',transport);
   return {calls,result,run:()=>send({recipient:{email:'new@example.com'},idempotencyKey:'one-reply',clientMessageId},
     {sendRelay:async(request)=>{calls.push('send');assert.equal(request.source.clientMessageId,clientMessageId);if(failSend)throw Error('send refused');return result;}},
-    [],'Hello',[],async()=>{calls.push('contacts');if(failRefresh)throw Error('offline');},async()=>{})};
+    [],'Hello',[],async()=>{calls.push('contacts');if(failRefresh)throw Error('offline');})};
 }
 test('a successful direct reply returns its receipt without waiting for contacts',async()=>{
   const h=harness();assert.equal(await h.run(),h.result);assert.deepEqual(h.calls,['send']);
@@ -37,7 +37,6 @@ test('accepted sends coalesce background contact and history refreshes and toler
     setTimeout(fn){timer=fn;return {unref(){}};},
     refreshSent:async()=>{calls.push('sent');},
     refreshContacts:async()=>{calls.push('contacts');throw Error('offline');},
-    refreshCanonicalChats:async()=>{calls.push('chats');},
     pushInboxQuiet:()=>{calls.push('paint');},
   });
   const from=main.indexOf('let queuedSendRefreshTimer = null;');
@@ -48,6 +47,6 @@ test('accepted sends coalesce background contact and history refreshes and toler
   assert.deepEqual(calls,[],'no cache request delays the delivery acknowledgement');
   timer();
   await new Promise(setImmediate);
-  assert.deepEqual(calls,['sent','contacts','chats','paint']);
+  assert.deepEqual(calls,['sent','contacts','paint']);
   assert.match(main,/onSent: \(\) => refreshAfterQueuedSend\(\)/);
 });

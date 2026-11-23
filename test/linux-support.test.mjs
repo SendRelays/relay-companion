@@ -512,6 +512,8 @@ test("Linux terminal discovery covers Fedora and does not depend on which", (t) 
   );
   assert.deepEqual(
     linuxTerminalInvocation("claude", ["--resume", "session-1"], {
+      // An empty PATH: a real claude on the test machine must not change the answer.
+      env: { PATH: root },
       available: (command) => ["claude", "ptyxis"].includes(command),
     }),
     { command: "ptyxis", args: ["--", "claude", "--resume", "session-1"] },

@@ -201,11 +201,25 @@ export function companionStatePath(dir = companionHome()) {
   return path.join(dir, "state.json");
 }
 
+// Defaults stand in for a state file that is missing or corrupt. One that
+// exists but could not be read just now (locked by antivirus or a sync tool on
+// Windows) also reads as defaults, but is remembered here, and writing that
+// stand-in back is skipped: it would replace the whole inbox cache.
+const unreadableStates = new WeakSet();
+
 function readCompanionState(statePath) {
+  let text;
+  try {
+    text = fs.readFileSync(statePath, "utf8");
+  } catch (error) {
+    const state = structuredClone(DEFAULT_COMPANION_STATE);
+    if (error && error.code !== "ENOENT") unreadableStates.add(state);
+    return state;
+  }
   try {
     return {
       ...structuredClone(DEFAULT_COMPANION_STATE),
-      ...JSON.parse(fs.readFileSync(statePath, "utf8")),
+      ...JSON.parse(text),
     };
   } catch {
     return structuredClone(DEFAULT_COMPANION_STATE);
@@ -213,6 +227,10 @@ function readCompanionState(statePath) {
 }
 
 function writeCompanionState(statePath, state) {
+  if (unreadableStates.has(state)) {
+    console.warn(`[relay] ${statePath} could not be read; not overwriting it this time`);
+    return;
+  }
   atomicWriteJsonSync(statePath, state, { mode: 0o600 });
 }
 

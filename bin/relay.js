@@ -1294,7 +1294,7 @@ function cmdUpdateChannel(positional = []) {
   }
   // Release code and its server contract are one environment. Keeping these as
   // independent switches allowed a dev Companion to keep calling production,
-  // where unreleased routes (notably Slack) correctly do not exist. Preserve
+  // where unreleased routes correctly do not exist. Preserve
   // the old command as an alias, but make the resulting state coherent.
   if (requested === UPDATE_CHANNEL_DEV) return cmdEnv(["dev"]);
   if (requested === UPDATE_CHANNEL_STAGING) return cmdEnv(["staging"]);

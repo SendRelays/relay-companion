@@ -9,14 +9,13 @@ const source = html.slice(html.indexOf("  function chatSections()"), html.indexO
 function fixture() {
   const state = vm.createContext({
     activeView: "threads", conversationSurface: () => "relay",
-    payload: { chats: [] }, contactChatAnchors: new Map(), canonicalChatDetails: new Map(),
+    payload: {}, contactChatAnchors: new Map(), canonicalChatDetails: new Map(),
     groupsList: [{ id: "grp_a", name: "Room" }, { id: "grp_b", name: "Room" }],
     convos: [],
     normalizedPartyName: (v) => String(v || "").toLowerCase(),
     stablePartyKey: (v) => v, sortConversationRooms: (rooms) => rooms,
     groupInfoRoster: () => [], groupMemberSummary: () => "", assignFallbackChatIds: () => {},
-    isUnansweredLinkAudience: () => false, roomFromChatSummary: (chat) => chat,
-    isSlackIntegratedRoom: (room) => room.provider === "slack",
+    isUnansweredLinkAudience: () => false,
   });
   vm.runInContext("function chatConversations() { return convos; }\n" + source, state);
   return state;
@@ -48,15 +47,8 @@ test("stable group lookup distinguishes identical names and never resolves a mis
   assert.equal(state.chatRoomForThread("group-room:grp_missing"), null);
 });
 
-test("non-Slack cached details without a listed room return null without throwing", () => {
+test("cached details without a listed room return null without throwing", () => {
   const state = fixture();
   state.canonicalChatDetails.set("chat_missing", { chatId:"chat_missing", provider:"relay" });
   assert.equal(state.chatRoomForThread("chat_missing"), null);
-});
-
-
-test("Slack cached rooms remain addressable without a list summary", () => {
-  const state = fixture();
-  state.canonicalChatDetails.set("chat_slack", { chatId:"chat_slack", provider:"slack" });
-  assert.equal(state.chatRoomForThread("chat_slack").chatId, "chat_slack");
 });

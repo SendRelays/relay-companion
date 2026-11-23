@@ -191,15 +191,10 @@ test("compact room navigation animates exact viewport pixels with a matching Bac
   assert.match(relays, /startRoomViewTransition\(\(\) => \{[\s\S]*?openThreadDetail\([\s\S]*?\}, \{ motion:"forward" \}\)/,
     "the stable Relays list uses browser-captured pixels for room entry");
 
-  // Slack-linked chats live in the same list (David, 2026-10-07), so they get
-  // the identical browser-captured entry. openThreadDetail switches to the
-  // Slack projection itself and starts hydration only after the destination.
-  assert.doesNotMatch(html, /function renderSlack\(/, "there is no second Slack list with its own entry path");
+  // openThreadDetail starts server hydration only after the destination.
   const open = between(html, "function openThreadDetail(", "// ---------- Settings view");
-  assert.ok(open.indexOf('source = "slack";') < open.indexOf("commitNavigation({ outerScrollTop: 0 });"),
-    "the projection is chosen before the destination frame is committed");
-  assert.match(open, /commitNavigation\(\{ outerScrollTop: 0 \}\);[\s\S]*requestCanonicalChatDetail\(room, source, \{ includeSlack \}\)/,
-    "Slack navigation never waits on canonical hydration before motion starts");
+  assert.match(open, /commitNavigation\(\{ outerScrollTop: 0 \}\);[\s\S]*requestCanonicalChatDetail\(room\)/,
+    "navigation never waits on canonical hydration before motion starts");
 
   const back = between(html, 'thBackEl.addEventListener("click", () => {', "let threadsSource");
   assert.match(back, /startRoomViewTransition\(navigateBack, \{ motion:"back" \}\)/,

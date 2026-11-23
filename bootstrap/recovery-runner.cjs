@@ -223,6 +223,7 @@ async function recoverLocked({ homeDir = os.homedir(), env = process.env, now = 
   if (!config) return { ok: false, status: "configuration-unavailable" };
   const channel = channelFrom(config, env);
   const policy = policyFactory({ root: path.join(root, "recovery"), now });
+  const runStartedAt = now();
   const previous = read(stateFile);
   const runId = env.RELAY_RECOVERY_RUN_ID || crypto.randomUUID();
   const diagnosticScope = diagnostics.configIdentity(homeDir)?.scope || null;
@@ -496,6 +497,9 @@ async function recoverLocked({ homeDir = os.homedir(), env = process.env, now = 
     if (quarantine.blocked) return status({ ok: true, status: "deferred-release-cooldown", desiredVersion, runtimeHealthy: runtimeVerified, runtimeAvailable: runtimeResponsive, retryAt: quarantine.retryAt, failures: quarantine.failures });
     const busy = busyDecision(heartbeat, { homeDir, now: now() });
     if (busy) return status({ ok: true, status: busy, desiredVersion, ...repairState });
+    // A sleeping or briefly waking machine cannot finish a download; wait
+    // until it is properly awake (recovery-policy.cjs).
+    if (policy.asleep?.()) return status({ ok: true, status: "deferred-asleep", desiredVersion, ...repairState });
     // Never start a five-minute download to race an installer that is already
     // running; the daemon's updater discovers the same release we just did.
     const deferredBeforeDownload = deferToTransaction({ desiredVersion, ...repairState });
@@ -541,12 +545,17 @@ async function recoverLocked({ homeDir = os.homedir(), env = process.env, now = 
       const deferred = deferToTransaction({ desiredVersion, ...repairState });
       if (deferred) return deferred;
       if (workerLostLock(error)) return status({ ok: true, status: "deferred-update-in-flight", desiredVersion, ...repairState, runtimeHealthy: false });
-      policy.failure(channel, desiredVersion, { id: attemptId, reason: error.message });
-      policy.interrupt();
+      if (policy.failure(channel, desiredVersion, { id: attemptId, reason: error.message, since: activationAt })?.slept !== true) policy.interrupt();
       throw error;
     }
   } catch (error) {
     const activeStatus = read(stateFile);
+    // The machine slept during this run: the failure says nothing, so it
+    // neither counts nor delays the next run.
+    let slept = false;
+    try { slept = policy.sleptSince?.(runStartedAt) === true; } catch {}
+    if (slept) return status({ ok: true, status: "deferred-asleep", desiredVersion: activeStatus?.desiredVersion || null, version: current?.version,
+      lastError: String(error.message).slice(0, 300) });
     const failures = previous && previous.desiredVersion === activeStatus?.desiredVersion ? (previous.failures || 0) + 1 : 1;
     return status({ ok: false, status: "failed", desiredVersion: activeStatus?.desiredVersion || null, version: current?.version,
       restarts: activeStatus?.restarts, staleSince: activeStatus?.staleSince,

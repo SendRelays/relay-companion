@@ -20,12 +20,12 @@ try {
     window.contactsFixture=[{id:'friend',name:'Friend',emails:['friend@example.com'],email:'friend@example.com',onRelay:true},
       // Delivery records the sender; that is not the person adding them.
       {id:'inbound-0',name:'Sender 0',email:'sender0@example.com',emails:['sender0@example.com'],onRelay:true,source:'inbound'}];
-    window.payloadFixture={account:{paired:true,userId:'self',name:'Test User',email:'self@example.com',hasSentRelay:true},ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1},features:{todo:true,slack:true},relays:[
+    window.payloadFixture={account:{paired:true,userId:'self',name:'Test User',email:'self@example.com',hasSentRelay:true},ui:{canDismiss:true,onboardingRequired:false,completedOnboardingVersion:1},features:{todo:true},relays:[
       relay('relay_a1','0',{createdAt:at(3)}),relay('relay_a2','0',{createdAt:at(2)}),
       relay('relay_b1','1'),
       relay('relay_c1','2',{forAgent:'',state:'read',unread:false}),
       {id:'relay_f1',threadId:'friend-thread',direction:'inbound',state:'delivered',unread:true,relayNotificationKind:'plain_relay',senderName:'Friend',senderEmail:'friend@example.com',title:'Known conversation',forHuman:'Hello friend',createdAt:at(10),attachments:[]}
-    ],sent:[],requests:[],chats:[],slackChats:[],contacts:window.contactsFixture};
+    ],sent:[],requests:[],chats:[],contacts:window.contactsFixture};
     const api={isTestOverlay:true,refresh:async()=>structuredClone(window.payloadFixture),refreshSent:async()=>({items:[]}),contacts:async()=>structuredClone(window.contactsFixture),groups:async()=>({ok:true,result:[]}),accountInfo:async()=>structuredClone(window.payloadFixture.account),agentSurfaces:async()=>({}),
       deleteRelay:async id=>{window.writes.push(['delete',id]);if(window.failDelete)return {ok:false,error:'offline'};window.payloadFixture.relays=window.payloadFixture.relays.filter(r=>r.id!==id);return {ok:true};},
       blockRequest:async id=>{window.writes.push(['block',id]);if(window.failBlock)throw Error('offline');return {blocked:true};},

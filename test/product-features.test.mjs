@@ -12,7 +12,7 @@ const DEVELOPER = { id: "usr_test", accountKind: "human", isDeveloper: true };
 const ORDINARY_USER = { id: "usr_test", accountKind: "human", isDeveloper: false };
 const DEVELOPER_SURFACES = {
   developerAccount: true, taskExecution: true,
-  topics: true, slack: true, peopleMentions: true, agentMentions: true,
+  topics: true, peopleMentions: true, agentMentions: true,
   relayWork: true, aiSessions: true, connectors: true, messageMutations: true,
 };
 // Editing and deleting one's own sent messages ship to every account on every
@@ -21,7 +21,7 @@ const DEVELOPER_SURFACES = {
 // the legacy task protocol stays with the developers.
 const ORDINARY_SURFACES = {
   developerAccount: false, taskExecution: false,
-  topics: false, slack: false, peopleMentions: true, agentMentions: false,
+  topics: false, peopleMentions: true, agentMentions: false,
   relayWork: false, aiSessions: false, connectors: false, messageMutations: true,
 };
 // The developer-account tier (Shane and David, 2026-09-21): on staging and
@@ -31,22 +31,22 @@ const PRODUCTION_DEVELOPER_SURFACES = { ...ORDINARY_SURFACES, developerAccount: 
 
 test("developer capabilities require both the server-owned role and a non-production environment", async () => {
   assert.deepEqual(productFeatures({ env: { NODE_ENV: "development" }, user: ORDINARY_USER }), {
-    environment: "local", developer: false, orgAdmin: false, googleContacts: false, conductor: false, replyThreads: false, smartTips: true, fullAppExpand: true, inboxPages: true, requests: true, legacyTaskProtocol: false, cowork: false, chatGptApp: false, ...ORDINARY_SURFACES,
+    environment: "local", developer: false, orgAdmin: false, conductor: false, replyThreads: false, smartTips: true, fullAppExpand: true, requests: true, legacyTaskProtocol: false, cowork: false, chatGptApp: false, ...ORDINARY_SURFACES,
   });
   assert.deepEqual(productFeatures({ env: { NODE_ENV: "development" }, user: DEVELOPER }), {
-    environment: "local", developer: true, orgAdmin: false, googleContacts: true, conductor: true, replyThreads: true, smartTips: true, fullAppExpand: true, inboxPages: true, requests: true, legacyTaskProtocol: true, cowork: false, chatGptApp: false, ...DEVELOPER_SURFACES,
+    environment: "local", developer: true, orgAdmin: false, conductor: true, replyThreads: true, smartTips: true, fullAppExpand: true, requests: true, legacyTaskProtocol: true, cowork: false, chatGptApp: false, ...DEVELOPER_SURFACES,
   });
   assert.deepEqual(productFeatures({ env: { RELAY_UPDATE_CHANNEL: "dev" }, user: DEVELOPER }), {
-    environment: "dev", developer: true, orgAdmin: false, googleContacts: true, conductor: true, replyThreads: true, smartTips: true, fullAppExpand: true, inboxPages: true, requests: true, legacyTaskProtocol: true, cowork: false, chatGptApp: false, ...DEVELOPER_SURFACES,
+    environment: "dev", developer: true, orgAdmin: false, conductor: true, replyThreads: true, smartTips: true, fullAppExpand: true, requests: true, legacyTaskProtocol: true, cowork: false, chatGptApp: false, ...DEVELOPER_SURFACES,
   });
   assert.deepEqual(productFeatures({ env: { RELAY_UPDATE_CHANNEL: "staging" }, user: DEVELOPER }), {
-    environment: "staging", developer: false, orgAdmin: false, googleContacts: false, conductor: false, replyThreads: false, smartTips: true, fullAppExpand: true, inboxPages: true, requests: true, legacyTaskProtocol: false, cowork: false, chatGptApp: false, ...PRODUCTION_DEVELOPER_SURFACES,
+    environment: "staging", developer: false, orgAdmin: false, conductor: false, replyThreads: false, smartTips: true, fullAppExpand: true, requests: true, legacyTaskProtocol: false, cowork: false, chatGptApp: false, ...PRODUCTION_DEVELOPER_SURFACES,
   });
   assert.deepEqual(productFeatures({ env: { RELAY_ENV: "staging" }, user: DEVELOPER }), {
-    environment: "staging", developer: false, orgAdmin: false, googleContacts: false, conductor: false, replyThreads: false, smartTips: true, fullAppExpand: true, inboxPages: true, requests: true, legacyTaskProtocol: false, cowork: false, chatGptApp: false, ...PRODUCTION_DEVELOPER_SURFACES,
+    environment: "staging", developer: false, orgAdmin: false, conductor: false, replyThreads: false, smartTips: true, fullAppExpand: true, requests: true, legacyTaskProtocol: false, cowork: false, chatGptApp: false, ...PRODUCTION_DEVELOPER_SURFACES,
   });
   assert.deepEqual(productFeatures({ env: {}, user: DEVELOPER }), {
-    environment: "production", developer: false, orgAdmin: false, googleContacts: false, conductor: false, replyThreads: false, smartTips: true, fullAppExpand: true, inboxPages: true, requests: true, legacyTaskProtocol: false, cowork: false, chatGptApp: false, ...PRODUCTION_DEVELOPER_SURFACES,
+    environment: "production", developer: false, orgAdmin: false, conductor: false, replyThreads: false, smartTips: true, fullAppExpand: true, requests: true, legacyTaskProtocol: false, cowork: false, chatGptApp: false, ...PRODUCTION_DEVELOPER_SURFACES,
   });
   for (const environment of ["local", "dev", "staging", "production"]) {
     assert.ok(!Object.hasOwn(productFeatures({ env: { RELAY_ENV: environment }, user: DEVELOPER }), "todo"), "the Todo feature is removed on every row");
@@ -63,13 +63,6 @@ test("ChatGPT moves to Relay's ChatGPT app only when the server says so, for peo
   assert.equal(productFeatures({ env: {}, user: ORDINARY_USER }).chatGptApp, false);
   assert.equal(productFeatures({ env: {}, user: null }).chatGptApp, false);
   assert.equal(productFeatures({ env: {}, user: { id: "usr_g", accountKind: "granular_employee", chatGptApp: true } }).chatGptApp, false);
-});
-
-test("Google Contacts sync requires both the Dev deployment and developer account role", () => {
-  assert.equal(productFeatures({ env: { RELAY_UPDATE_CHANNEL: "dev" }, user: ORDINARY_USER }).googleContacts, false);
-  assert.equal(productFeatures({ env: { RELAY_UPDATE_CHANNEL: "dev" }, user: DEVELOPER }).googleContacts, true);
-  assert.equal(productFeatures({ env: { RELAY_UPDATE_CHANNEL: "staging" }, user: DEVELOPER }).googleContacts, false);
-  assert.equal(productFeatures({ env: { RELAY_UPDATE_CHANNEL: "stable" }, user: DEVELOPER }).googleContacts, false);
 });
 
 test("live server role outranks the cached pairing profile", async () => {
@@ -118,7 +111,7 @@ test("developer status brings the complete Task substrate on dev but never Cowor
   assert.equal(features.requests, true);
   assert.deepEqual(
     {
-      topics: features.topics, slack: features.slack, peopleMentions: features.peopleMentions, agentMentions: features.agentMentions,
+      topics: features.topics, peopleMentions: features.peopleMentions, agentMentions: features.agentMentions,
       developerAccount: features.developerAccount, taskExecution: features.taskExecution,
       relayWork: features.relayWork,
       aiSessions: features.aiSessions, connectors: features.connectors, messageMutations: features.messageMutations,
@@ -135,7 +128,7 @@ test("an explicit production environment wins over a local API URL, so the clone
   assert.equal(clone.environment, "production");
   assert.deepEqual(
     {
-      topics: clone.topics, slack: clone.slack, peopleMentions: clone.peopleMentions, agentMentions: clone.agentMentions,
+      topics: clone.topics, peopleMentions: clone.peopleMentions, agentMentions: clone.agentMentions,
       developerAccount: clone.developerAccount, taskExecution: clone.taskExecution,
       relayWork: clone.relayWork,
       aiSessions: clone.aiSessions, connectors: clone.connectors, messageMutations: clone.messageMutations,
@@ -269,19 +262,15 @@ test("the first payload render follows the account-gated tabs", () => {
   assert.doesNotMatch(source, /features\?\.todo|data-view="tasks"/, "the Todo tab is removed");
   assert.match(source, /if \(activeView === "tasks" \|\| activeView === "requestDetail"\) \{\s+activeView = "relays";/,
     "a remembered retired view lands on the inbox");
-  // Slack has no tab of its own (David, 2026-10-07): its chats live in Inbox ›
-  // Chats, so the only account-gated tab left is Topics.
+  // The only account-gated tab left is Topics.
   assert.match(source, /view === "topics" && payload\.features\?\.topics !== true/);
-  assert.doesNotMatch(source, /data-view="slack"|view === "slack"/);
-  assert.match(source, /if \(payload\.features\?\.slack !== true && threadsSource === "slack"\) \{\s*activeView = "relays";\s*threadsSource = "relay";/,
-    "an account that loses Slack never stays inside a Slack projection");
 });
 
-test("customer builds keep person mentions while hiding Slack and agent mentions", () => {
+test("customer builds keep person mentions while hiding agent mentions", () => {
   const staging = productFeatures({ env: { RELAY_UPDATE_CHANNEL: "staging" }, user: DEVELOPER });
   assert.equal(staging.peopleMentions, true);
   assert.equal(staging.agentMentions, false);
-  assert.equal(staging.slack, false);
+  assert.equal("slack" in staging, false, "Slack is gone from the product");
 
   const source = fs.readFileSync(path.join(here, "../overlay/inbox.html"), "utf8");
   assert.match(source, /payload\.features\?\.peopleMentions === true && thread\.isGroup/);
@@ -312,10 +301,9 @@ test("the You page always offers which app opens relays, and the fresh open goes
   const source = fs.readFileSync(path.join(here, "../overlay/inbox.html"), "utf8");
   const settings = source.slice(source.indexOf("function renderSettings()"), source.indexOf("function wireSettings()"));
   // Your AIs (Setup, 2026-10-07) sits first: nothing works until an AI has Relay.
-  // Slack, the other thing Relay connects to, shares its card. The app
-  // switches moved onto the Your AIs page (Sven's cut, 2026-10-08), one tap
-  // from the first row of You, and render there unconditionally.
-  assert.match(settings, /if \(info\.paired\) \{\s*const connections = `\$\{window\.relay\.setupSnapshot \? setupEntryHtml\(\) : ""\}\$\{slackSettingsHtml\(info\)\}`;/);
+  // The app switches moved onto the Your AIs page (Sven's cut, 2026-10-08),
+  // one tap from the first row of You, and render there unconditionally.
+  assert.match(settings, /if \(info\.paired\) \{\s*const connections = window\.relay\.setupSnapshot \? setupEntryHtml\(\) : "";/);
   assert.match(settings, /document\.getElementById\("setupEntry"\)\?\.addEventListener\("click", \(event\) => \{ event\.stopPropagation\(\); openSetupPage\(\); \}\);/);
   // Each AI's switch is on its own row there, shown once that AI is connected.
   const setupPage = source.slice(source.indexOf("function setupPageHtml()"), source.indexOf("/** The You page's door"));

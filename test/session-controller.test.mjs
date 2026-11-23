@@ -88,7 +88,7 @@ test("ordinary AI-to-AI sends retain the peer envelope", () => {
   assert.match(prompt, /Peer message/);
 });
 
-test("a remote Slack action materializes the exact Relay instead of inventing a second prompt", async () => {
+test("a remote action materializes the exact Relay instead of inventing a second prompt", async () => {
   const staged = [];
   const opened = [];
   const receipts = [];
@@ -583,4 +583,33 @@ test("a session that leaves the directory is a change again when it returns", as
   h.advance(4_000); // delta tick: x1 is back, unchanged in content
   await runSessionDirectoryOnce(h.options);
   assert.deepEqual(h.calls, [["c1:idle", "x1:active"], ["c1:idle"], ["x1:active"]]);
+});
+
+test("an operation kind this version does not know is refused, never run as an AI turn", async () => {
+  const evidence = Promise.withResolvers();
+  const finished = [];
+  await runSessionDirectoryOnce({
+    executionAllowed: () => true,
+    client: {
+      async sessionControllerInbox() {
+        return { operations: [{ id: "op_future_kind", kind: "interrupt", input: { provider: "claude", agentRunRelayId: "relay_run" } }] };
+      },
+      async claimSessionOperation(id) {
+        return { claimToken: "claim_1", operation: { id, kind: "interrupt", input: { provider: "claude", agentRunRelayId: "relay_run" } }, target: { id: "session_1", provider: "claude" } };
+      },
+      async renewSessionOperationLease() {},
+      async agentRunFinish(relayId, message) { finished.push([relayId, message]); },
+      async recordSessionOperationEvidence(id, body) { evidence.resolve({ id, ...body }); return {}; },
+      async publishSessionObservations() { return { sessions: [] }; },
+    },
+    discover: () => [],
+    controller: () => ({}),
+  });
+  const recorded = await evidence.promise;
+  assert.equal(recorded.id, "op_future_kind");
+  assert.equal(recorded.state, "failed");
+  assert.equal(recorded.claimToken, "claim_1");
+  assert.match(recorded.error, /unsupported_operation_kind/);
+  assert.equal(finished.length, 1);
+  assert.match(finished[0][1], /unsupported_operation_kind/);
 });

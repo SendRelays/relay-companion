@@ -9,6 +9,7 @@ import { updateChannel } from "./config.js";
 import { recoveryPolicy } from "../bootstrap/recovery-policy.cjs";
 import { compatibleNodeRuntime, persistentNodePath, stableNodePath } from "./install.js";
 import { ACTIVE_UPDATE_WORKER_ENV } from "./update-agent-cleanup.js";
+import { ensureMcpBrokerProvisioned } from "./mcp-broker-state.js";
 import nodeContract from "../bootstrap/node-contract.cjs";
 import {
   canonicalRuntimeLayout,
@@ -114,6 +115,32 @@ export function smokeCanonicalCandidate(candidate, { run = defaultRun, log = () 
   }
 }
 
+/**
+ * The release copies cleanup must keep besides the active one: every release a
+ * running process uses, and the watchdog's last responsive installations
+ * (runtime-good.json, runtime-previous-good.json), which are its offline
+ * recovery sources. `recoveryBackups` counts the backups actually recorded.
+ */
+export function keptReleaseRoots({
+  homeDir = os.homedir(),
+  platform = process.platform,
+  getProtectedPackageRoots = processReferencedCanonicalRoots,
+  fsImpl = fs,
+} = {}) {
+  const protectedPackageRoots = [...getProtectedPackageRoots({ homeDir, platform })];
+  let recoveryBackups = 0;
+  for (const name of ["runtime-good.json", "runtime-previous-good.json"]) {
+    try {
+      const good = JSON.parse(fsImpl.readFileSync(path.join(homeDir, ".relay", "recovery", name), "utf8"));
+      if (typeof good?.packageRoot === "string") {
+        protectedPackageRoots.push(good.packageRoot);
+        recoveryBackups += 1;
+      }
+    } catch {}
+  }
+  return { protectedPackageRoots, recoveryBackups };
+}
+
 export function processReferencedCanonicalRoots({
   homeDir = os.homedir(),
   platform = process.platform,
@@ -164,6 +191,25 @@ export async function activateCanonicalRuntime(target, options = {}) {
   finally { release?.(); }
 }
 
+/** Rewrite the shared MCP broker descriptor to name `target`'s broker. Never throws. */
+export function provisionBrokerForTarget(target, {
+  homeDir = os.homedir(),
+  platform = process.platform,
+  env = process.env,
+  provision = ensureMcpBrokerProvisioned,
+} = {}) {
+  // The same config root the daemon's own registration repair uses
+  // (mcp-launcher.js ensureStableMcpLauncher), so both write one descriptor.
+  const brokerEnv = { ...env, ...(env.RELAY_CONFIG || env.RELAY_CONFIG_DIR ? {} : { RELAY_CONFIG_DIR: path.join(homeDir, ".relay") }) };
+  delete brokerEnv[ACTIVE_UPDATE_WORKER_ENV];
+  try {
+    provision({ env: brokerEnv, packageRoot: target.packageRoot, brokerNode: target.node, platform, homeDir });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: "broker-descriptor-provision-failed", detail: error?.message || String(error) };
+  }
+}
+
 async function activateDrainedRuntime(target, {
   homeDir = os.homedir(),
   platform = process.platform,
@@ -177,6 +223,7 @@ async function activateDrainedRuntime(target, {
   activationDeadlineMs = 90_000,
   now = Date.now,
   repairExecutable = target,
+  provisionBroker = provisionBrokerForTarget,
 } = {}) {
   if (!target?.bin || !target?.node || !target?.packageRoot) return { ok: false, reason: "activation-target-invalid" };
   if (!repairExecutable?.bin || !repairExecutable?.node) return { ok: false, reason: "repair-runtime-missing" };
@@ -195,6 +242,20 @@ async function activateDrainedRuntime(target, {
   if (!commandOk(repair)) {
     return { ok: false, reason: "runtime-registration-failed", detail: repair?.error?.message || repair?.stderr || repair?.stdout || "" };
   }
+
+  // Point the MCP broker descriptor at the target BEFORE the old broker is
+  // stopped. Each release's broker has its own endpoint, and every AI session's
+  // bridge redials whatever the descriptor names the moment its broker goes away
+  // (native-bridge/session.go). Until now only the new daemon rewrote it, a few
+  // seconds after starting, so in that window reconnecting bridges dialled the
+  // old endpoint, found nothing and started the OLD release's broker again. On a
+  // Mac that old broker fails activation's exact-root proof, activation stops it,
+  // bridges bring it back, and the 90 s deadline runs out: Sven, 2026-11-24
+  // (oldBroker:true, rolled back), and 2026-10-10 and 2026-11-12 before that.
+  // A rollback activates the previous release through this same path, so the
+  // descriptor follows it back. A failure here is not fatal: the new daemon
+  // still rewrites the descriptor when it starts, as before.
+  provisionBroker(target, { homeDir, platform });
 
   if (platform === "darwin") {
     return activateMacRuntimeServices(target, {
@@ -333,15 +394,7 @@ export async function runCanonicalUpdateTransaction({
   if (isElectronExecutable(serviceNode)) {
     return { ok: false, phase: "input", reason: "service-node-electron", detail: serviceNode };
   }
-  const protectedPackageRoots = [...getProtectedPackageRoots({ homeDir, platform })];
-  // The watchdog's last responsive installations are offline recovery sources.
-  // Retain them across failed replacements as well as ordinary cleanup.
-  for (const name of ["runtime-good.json", "runtime-previous-good.json"]) {
-    try {
-      const good = JSON.parse(fs.readFileSync(path.join(homeDir, ".relay", "recovery", name), "utf8"));
-      if (typeof good?.packageRoot === "string") protectedPackageRoots.push(good.packageRoot);
-    } catch {}
-  }
+  const { protectedPackageRoots } = keptReleaseRoots({ homeDir, platform, getProtectedPackageRoots });
   const lockIdentity = { ...(requestId ? { requestId } : {}), ...(workerId ? { workerId } : {}) };
   let admitted = false;
   const admit = async (owner) => {

@@ -175,7 +175,7 @@ export function pruneCanonicalReleases({
   active = null,
   previous = null,
   protectedPackageRoots = [],
-  retainRecent = 1,
+  retainRecent = 0,
   fsImpl = fs,
 } = {}) {
   const api = pathsFor(platform);
@@ -222,6 +222,58 @@ export function pruneCanonicalReleases({
     else if (result.reason === "release-in-use") inUse.push(entry.name);
   }
   return { ok: true, removed, retained: [...keep], inUse };
+}
+
+/**
+ * Remove release copies nothing needs any more, outside an update. Cleanup used
+ * to run only inside an update transaction, so a copy that was still in use at
+ * that moment (an old MCP broker, a backup the recovery runner has since moved
+ * past) stayed on disk until the next update: 3.3 GB on Sven's Mac, 2026-11-24.
+ *
+ * Kept: the active release, both recovery backups (runtime-good.json and
+ * runtime-previous-good.json, which the caller passes in protectedPackageRoots
+ * with every release a running process uses) and, on macOS, the release the
+ * stable Relay.app link points into. Nothing else.
+ *
+ * It takes the same transaction lock as an update and steps aside when an
+ * update holds it, so it can never delete a copy an update is installing. It
+ * does nothing unless the runtime is settled (active, not mid-activation or
+ * awaiting recovery) and at least one recovery backup is known, so a machine
+ * whose rollback target is not yet recorded keeps everything.
+ */
+export function tidyCanonicalReleases({
+  homeDir = os.homedir(),
+  platform = process.platform,
+  protectedPackageRoots = [],
+  recoveryBackups = 0,
+  fsImpl = fs,
+  now = Date.now,
+  lockIdentity = {},
+  prune = pruneCanonicalReleases,
+} = {}) {
+  if (!(recoveryBackups > 0)) return { ok: true, skipped: "no-recovery-backup-recorded", removed: [] };
+  const layout = canonicalRuntimeLayout({ homeDir, platform });
+  const lockOptions = {
+    platform, now, ownerIdentity: lockIdentity,
+    mkdirSync: fsImpl.mkdirSync.bind(fsImpl), readFileSync: fsImpl.readFileSync.bind(fsImpl),
+    writeFileSync: fsImpl.writeFileSync.bind(fsImpl), renameSync: fsImpl.renameSync.bind(fsImpl),
+    rmSync: fsImpl.rmSync.bind(fsImpl), statSync: fsImpl.statSync.bind(fsImpl), existsSync: fsImpl.existsSync.bind(fsImpl),
+    ...(typeof fsImpl.readdirSync === "function" ? { readdirSync: fsImpl.readdirSync.bind(fsImpl) } : {}),
+  };
+  let lock;
+  try { lock = acquireLock(layout.lockPath, lockOptions); }
+  catch (error) { return { ok: false, skipped: "transaction-lock-unavailable", detail: error?.message || String(error), removed: [] }; }
+  if (!lock.ok) return { ok: true, skipped: lock.reason || "transaction-in-progress", removed: [] };
+  try {
+    // Read under the lock: an update that finished a moment ago has committed.
+    const active = readCanonicalRuntimeState({ homeDir, platform, readFileSync: fsImpl.readFileSync.bind(fsImpl) });
+    if (!active || active.active !== true || (active.state && active.state !== "active")) {
+      return { ok: true, skipped: "runtime-not-settled", removed: [] };
+    }
+    return prune({ homeDir, platform, active, previous: null, protectedPackageRoots, retainRecent: 0, fsImpl });
+  } finally {
+    try { lock.release(); } catch {}
+  }
 }
 
 const TRASH_PREFIX = ".trash-";
@@ -492,7 +544,7 @@ export async function recoverCanonicalRuntime({
         active: target?.active === true ? target : null,
         previous: null,
         protectedPackageRoots,
-        retainRecent: 1,
+        retainRecent: 0,
         fsImpl,
       });
     } catch {}
@@ -1279,7 +1331,7 @@ export async function repairCanonicalRuntime({
             active: previous?.active === true ? previous : null,
             previous: null,
             protectedPackageRoots,
-            retainRecent: 1,
+            retainRecent: 0,
             fsImpl,
           });
         } catch {}
@@ -1313,7 +1365,7 @@ export async function repairCanonicalRuntime({
         active: candidate,
         previous,
         protectedPackageRoots,
-        retainRecent: 1,
+        retainRecent: 0,
         fsImpl,
       });
     } catch (error) {

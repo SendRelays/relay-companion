@@ -13,6 +13,7 @@ import {
   recoverCanonicalRuntime,
   pruneCanonicalReleases,
   repairCanonicalRuntime,
+  tidyCanonicalReleases,
   verifyCanonicalTreeComplete,
 } from "../src/canonical-runtime.js";
 
@@ -733,7 +734,7 @@ test("repair requires an exact version", async () => {
   assert.equal((await repairCanonicalRuntime({ version: "^0.1.241" })).reason, "exact-version-required");
 });
 
-posixFsTest("28 immutable updates retain only active, previous, process-referenced, and one forensic release", () => {
+posixFsTest("28 immutable updates retain only active, previous, process-referenced, and (when asked) one forensic release", () => {
   const homeDir = fixture();
   const { releasesDir } = canonicalRuntimeLayout({ homeDir, platform: "linux" });
   fs.mkdirSync(releasesDir, { recursive: true });
@@ -761,6 +762,37 @@ posixFsTest("28 immutable updates retain only active, previous, process-referenc
   const remaining = fs.readdirSync(releasesDir).sort();
   assert.deepEqual(remaining, [releases[12].releaseId, releases[25].releaseId, releases[26].releaseId, releases[27].releaseId].sort());
   assert.equal(fs.readFileSync(path.join(external, "sentinel"), "utf8"), "external");
+});
+
+test("tidy keeps the active release, both recovery backups and in-use copies, and removes the rest", t => {
+  const homeDir = fixture(), platform = process.platform;
+  t.after(() => fs.rmSync(homeDir, { recursive: true, force: true }));
+  const active = seededPointer(homeDir, "0.1.645-active", "0.1.645");
+  const good = seededPointer(homeDir, "0.1.644-good", "0.1.644");
+  const olderGood = seededPointer(homeDir, "0.1.643-older-good", "0.1.643");
+  const inUse = seededPointer(homeDir, "0.1.640-broker", "0.1.640");
+  const failed = seededPointer(homeDir, "0.1.645-failed", "0.1.645");
+  const ancient = seededPointer(homeDir, "0.1.600-ancient", "0.1.600");
+  writePointer(homeDir, active, platform);
+  const { releasesDir } = canonicalRuntimeLayout({ homeDir, platform });
+  const kept = [good.packageRoot, olderGood.packageRoot, inUse.packageRoot];
+  const releases = () => fs.readdirSync(releasesDir).filter((name) => !name.startsWith(".")).sort();
+
+  // No recovery backup recorded yet: the rollback target is unknown, keep everything.
+  assert.equal(tidyCanonicalReleases({ homeDir, platform, protectedPackageRoots: kept, recoveryBackups: 0 }).skipped, "no-recovery-backup-recorded");
+  assert.equal(releases().length, 6);
+
+  const result = tidyCanonicalReleases({ homeDir, platform, protectedPackageRoots: kept, recoveryBackups: 2 });
+  assert.deepEqual([...result.removed].sort(), [ancient.releaseId, failed.releaseId].sort());
+  assert.deepEqual(releases(), [active.releaseId, good.releaseId, olderGood.releaseId, inUse.releaseId].sort());
+  // The lock was released: a second tidy runs and finds nothing more to remove.
+  assert.deepEqual(tidyCanonicalReleases({ homeDir, platform, protectedPackageRoots: kept, recoveryBackups: 2 }).removed, []);
+
+  // Mid-update (an activation journal), nothing is touched.
+  const stray = seededPointer(homeDir, "0.1.601-stray", "0.1.601");
+  writePointer(homeDir, { schema: 1, state: "activating", active: false, candidate: failed, previous: active, preparedAt: 1 }, platform);
+  assert.equal(tidyCanonicalReleases({ homeDir, platform, protectedPackageRoots: kept, recoveryBackups: 2 }).skipped, "runtime-not-settled");
+  assert.ok(releases().includes(stray.releaseId));
 });
 
 posixFsTest("lock filesystem failures return structured results from repair and recovery", async () => {

@@ -38,6 +38,7 @@ import { signInInProgress } from "./installation-authorization.js";
 import { activeSessionOperationCount, runSessionDirectoryOnce } from "./session-controller.js";
 import { productFeatures } from "./product-features.js";
 import { migratePersistedContentFields } from "./content-field-migration.js";
+import { startReleaseTidy } from "./release-tidy.js";
 import agentRelayContext from "./agent-relay-context.cjs";
 import { storeDir } from "./host-paths.js";
 import { readCanonicalRuntime } from "./canonical-runtime.js";
@@ -1019,6 +1020,9 @@ async function runTaskDaemonImpl({ intervalMs = 4000, health } = {}) {
   const log = (m) => console.log(`[relay] ${new Date().toISOString()} ${m}`);
   migratePersistedContentFields({ log });
   startInboxWorker({ intervalMs, log });
+  // Unused release copies (failed updates, backups the recovery runner moved
+  // past) are removed every few hours, in a child process, never mid-update.
+  startReleaseTidy({ log });
   // Repair Relay.app + launchd surfaces independently of npm postinstall. This is a
   // bounded, per-version migration; it reloads only the pill and never unloads this
   // currently running daemon.

@@ -1030,8 +1030,10 @@ async function cmdDoctor(flags = {}) {
         if (Number.isFinite(kb) && kb > 0) sizeLabel = `, ${(kb / 1024 / 1024).toFixed(1)} GB`;
       }
       console.log(`  release trees on disk: ${releaseNames.length}${sizeLabel}`);
-      if (releaseNames.length > 3) {
-        console.log("    MORE THAN EXPECTED — failed updates were stranding releases; this build prunes them on the next update attempt");
+      // Kept: the active release, the two recovery backups (often the same
+      // releases as the active and previous one) and anything still running.
+      if (releaseNames.length > 4) {
+        console.log("    MORE THAN EXPECTED — Relay removes copies it no longer needs every few hours and after each update");
       }
     }
     if (process.platform === "darwin") {

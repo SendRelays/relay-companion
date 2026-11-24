@@ -22,8 +22,10 @@ import {
   CANDIDATE_SMOKE_TIMEOUT_MS,
   inspectUpdateRequest,
   legacyRuntimeTarget,
+  provisionBrokerForTarget,
   waitForUpdateRequestAdmission,
 } from "../src/canonical-updater.js";
+import { ACTIVE_UPDATE_WORKER_ENV } from "../src/update-agent-cleanup.js";
 
 test("a running tree that lost packages is not offered as a legacy rollback target", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-legacy-target-"));
@@ -56,7 +58,9 @@ import {
 const { installedServiceProcessRows } = createRequire(import.meta.url)("../bootstrap/runtime-health.cjs");
 // Service registration fixtures use foreign OS paths; activity admission is
 // exercised separately with real temporary homes in update-activity.test.mjs.
-const activateCanonicalRuntime = (target, options) => activateWithDrain(target, { macTransaction: async (_target, operation) => operation(), verifyReady: async () => ({ ok: true }), ...options, drain: async () => () => {} });
+// provisionBroker is stubbed: the real one rewrites the MCP broker descriptor under
+// the home directory, which would break the tester's own Relay.
+const activateCanonicalRuntime = (target, options) => activateWithDrain(target, { macTransaction: async (_target, operation) => operation(), verifyReady: async () => ({ ok: true }), provisionBroker: () => ({ ok: true }), ...options, drain: async () => () => {} });
 
 // These cases create a POSIX runtime tree on the real host filesystem. They
 // remain active on macOS/Linux; Windows behavior is covered by injected-path
@@ -340,6 +344,41 @@ test("macOS activation repairs all runtime registrations before restart and requ
   });
   assert.equal(unready.ok, false);
   assert.equal(unready.reason, "activation-not-ready");
+});
+
+test("activation points the MCP broker descriptor at the target before it stops any old process", async () => {
+  const target = {
+    node: "C:\\Relay\\node.exe",
+    bin: "C:\\Relay\\runtime\\releases\\645\\node_modules\\relay-companion\\bin\\relay.js",
+    packageRoot: "C:\\Relay\\runtime\\releases\\645\\node_modules\\relay-companion",
+  };
+  const events = [];
+  const run = (command, args) => {
+    events.push(command === "powershell.exe" ? "stop-old-processes" : `${command} ${args[0]}`);
+    return { status: 0, stdout: "", stderr: "" };
+  };
+  const provisionBroker = (provisioned) => { events.push(`descriptor -> ${provisioned.packageRoot}`); return { ok: true }; };
+  await activateCanonicalRuntime(target, { platform: "win32", run, attempts: 1, provisionBroker });
+  const descriptor = events.indexOf(`descriptor -> ${target.packageRoot}`);
+  assert.ok(descriptor > events.findIndex((event) => event.includes("repair-runtime")), "after the target registers its services");
+  assert.ok(descriptor < events.indexOf("stop-old-processes"), "before the old broker is stopped");
+  // A descriptor that cannot be written never stops the update; the new daemon rewrites it.
+  const failing = await activateCanonicalRuntime(target, { platform: "win32", run, attempts: 1,
+    provisionBroker: (provisioned, options) => provisionBrokerForTarget(provisioned, { ...options, provision: () => { throw new Error("locked"); } }) });
+  assert.notEqual(failing.reason, "broker-descriptor-provision-failed");
+});
+
+test("the broker descriptor is written for the target's own release and config root", () => {
+  const seen = [];
+  const result = provisionBrokerForTarget({ packageRoot: "/home/a/.relay/runtime/releases/645/node_modules/relay-companion", node: "/n/node" }, {
+    homeDir: "/home/a", platform: "linux", env: { PATH: "/bin", [ACTIVE_UPDATE_WORKER_ENV]: "1" }, provision: (args) => { seen.push(args); },
+  });
+  assert.deepEqual(result, { ok: true });
+  assert.equal(seen[0].packageRoot, "/home/a/.relay/runtime/releases/645/node_modules/relay-companion");
+  assert.equal(seen[0].brokerNode, "/n/node");
+  assert.equal(seen[0].env.RELAY_CONFIG_DIR, path.join("/home/a", ".relay"));
+  assert.equal(seen[0].env[ACTIVE_UPDATE_WORKER_ENV], undefined);
+  assert.equal(provisionBrokerForTarget({ packageRoot: "/x", node: "/n" }, { env: {}, provision: () => { throw new Error("no"); } }).ok, false);
 });
 
 test("Windows activation restarts tasks pill-first and rejects processes from an old root", async () => {

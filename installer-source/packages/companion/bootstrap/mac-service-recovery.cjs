@@ -25,10 +25,19 @@ function readRegistration(label, { homeDir = os.homedir(), run = defaultRun, fsI
   // plutil killed by the timeout says nothing about the file: a sleeping Mac's
   // brief wake ends mid-check (2026-11-20).
   if (decoded?.error?.code === "ETIMEDOUT" || (decoded?.signal && decoded?.status === null)) throw Error(`check-timed-out: ${label}`);
-  if (!commandOk(decoded)) throw Error(`invalid-service-plist: ${label}`);
-  const plist = JSON.parse(decoded.stdout);
-  const args = plist.ProgramArguments;
-  if (plist.Label !== label || !Array.isArray(args) || !args.every(x => typeof x === "string") || plist.Program) throw Error(`invalid-service-plist: ${label}`);
+  // `detail` says which check failed, in words that never hold a path or the
+  // file's contents, so the fleet can tell an unreadable file from one that
+  // names the wrong service (installation-health.cjs reports it).
+  const invalid = detail => Object.assign(Error(`invalid-service-plist: ${label}`), { detail });
+  if (!commandOk(decoded)) {
+    throw invalid(decoded?.error ? `plutil-${String(decoded.error.code || "error").toLowerCase().slice(0, 20)}` : `plutil-exit-${Number.isInteger(decoded?.status) ? decoded.status : "unknown"}`);
+  }
+  let plist;
+  try { plist = JSON.parse(decoded.stdout); } catch { throw invalid("plutil-output-unreadable"); }
+  const args = plist?.ProgramArguments;
+  if (plist?.Label !== label) throw invalid("wrong-label");
+  if (!Array.isArray(args) || !args.every(x => typeof x === "string")) throw invalid("no-program-arguments");
+  if (plist.Program) throw invalid("program-key");
   if (label === LABELS[0] && require("./node-contract.cjs").isElectronExecutable(args[0])) throw Error(`invalid-service-interpreter: ${label}`);
   const suffix = label === LABELS[0] ? /[\\/]bin[\\/]relay\.js$/ : /[\\/]overlay[\\/]main\.cjs$/;
   const script = args.find(x => /[\\/]node_modules[\\/]relay-companion[\\/]/.test(x) && suffix.test(x));

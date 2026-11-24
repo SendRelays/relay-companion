@@ -86,8 +86,10 @@ test("foreign channels expose a self-only leave action without roster administra
   assert.match(html, /<button class="gd-leave" type="button" data-gd-leave>Leave group<\/button>/);
   assert.doesNotMatch(html, /gd-leave-copy/);
   assert.match(html, /window\.relay\.groupLeave/);
-  assert.match(html, /leftGroupIds\.add\(g\.id\)/);
-  assert.match(html, /groupsList = groupsList\.filter\(\(group\) => group\.id !== g\.id\)/);
+  assert.match(html, /leftGroupIds\.add\(groupId\)/);
+  assert.match(html, /groupsList = groupsList\.filter\(\(group\) => group\.id !== groupId\)/);
+  // The row's ⋯ menu offers the same Leave, only for a group someone else owns.
+  assert.match(html, /\$\{!mine && !archived \? `<button type="button" role="menuitem" class="danger" data-group-leave=/);
 });
 
 test("People details and See info share the same roster component", () => {
@@ -180,6 +182,6 @@ test("groups are native Relay rosters, with no projected channels", () => {
   assert.match(html, /Group info is still syncing\./);
   const rows = html.slice(html.indexOf("function renderGroups()"), html.indexOf("function openGroupRoom(groupId)"));
   assert.match(rows, /const tile = groupAvatarStack\(g, roster\);/);
-  assert.match(rows, /<span class="cvg-edit" role="button" tabindex="0" data-group-edit=/);
+  assert.match(rows, /<button type="button" role="menuitem" data-group-edit=/);
   assert.doesNotMatch(rows, /cvg-badge/);
 });

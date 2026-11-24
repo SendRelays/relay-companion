@@ -52,6 +52,16 @@ try {
         return { ok:true, contact:copy(contact), contacts:copy(contacts) };
       },
       copyOnboardingInviteLink:async () => { window.calls.push(["copyInvite"]); return { ok:true }; },
+      contactDelete:async ({ contactId }) => {
+        window.calls.push(["contactDelete", contactId]);
+        contacts = contacts.filter((c) => c.id !== contactId);
+        return { ok:true, contacts:copy(contacts) };
+      },
+      groupLeave:async (id) => {
+        window.calls.push(["groupLeave", id]);
+        groups = groups.filter((g) => g.id !== id);
+        return ok({ left:true });
+      },
     };
     window.relay = new Proxy(api, { get:(target, key) => key in target ? target[key]
       : String(key).startsWith("on") ? (callback) => { window.events[key] = callback; return () => {}; }
@@ -137,7 +147,9 @@ try {
 
   // With Dana in the group, the deck shows her card behind the group's
   // square, and her name finds the group too.
-  await page.locator("#cvgList .cvg-item").filter({ hasText:"Project team" }).locator("[data-group-edit]").click();
+  const teamRow = page.locator("#cvgList .cvg-row").filter({ has:page.locator(".cvg-item", { hasText:"Project team" }) });
+  await teamRow.locator("[data-message-more]").click();
+  await teamRow.locator("[data-group-edit]").click();
   await page.locator(".gd-title h2").getByText("Project team").waitFor();
   // The group's own page introduces it with the same deck, larger.
   assert.equal(await page.locator(".gd-identity .cvg-stack .cv-avatar").count(), 1);
@@ -238,9 +250,38 @@ try {
   assert.deepEqual([field.border, field.outline, field.shadow, field.appearance], ["0px", "none", "none", "none"]);
   assert.notEqual(field.frame, "none", "the focus ring is on the frame");
 
+  // Every row has a ⋯ menu. A person's offers Edit, Delete and Block; a
+  // group's offers Edit, and Leave when someone else owns it.
+  await page.evaluate(() => {
+    groupsList = [...groupsList, { id:"grp_foreign", name:"Book club", owned:false, members:[], owner:{ name:"Sam Lee", email:"sam@example.test" } }];
+    renderGroups();
+  });
+  const groupRow = (name) => page.locator("#cvgList .cvg-row").filter({ has:page.locator(".cvg-item", { hasText:name }) });
+  await groupRow("Project team").locator("[data-message-more]").click();
+  assert.deepEqual(await groupRow("Project team").locator("[role=menuitem]").allInnerTexts(), ["Edit group"], "the creator archives, never leaves");
+  await page.keyboard.press("Escape");
+  await groupRow("Book club").locator("[data-message-more]").click();
+  assert.deepEqual(await groupRow("Book club").locator("[role=menuitem]").allInnerTexts(), ["Group details", "Leave group…"]);
+  await groupRow("Book club").locator("[data-group-leave]").click();
+  await page.locator(".people-dialog h2").getByText("Leave Book club?").waitFor();
+  await page.locator(".people-dialog [data-leave-confirm]").click();
+  await groupRow("Book club").waitFor({ state:"detached" });
+  assert.equal(await page.locator(".people-dialog").evaluate((el) => el.matches(":popover-open")), false);
+
+  const personRow = (name) => page.locator("#cvList .cv-person").filter({ has:page.locator(".cv-name", { hasText:name }) });
+  await personRow("Dana Kim").locator("[data-message-more]").click();
+  assert.deepEqual(await personRow("Dana Kim").locator("[role=menuitem]").allInnerTexts(), ["Edit contact", "Delete contact…"]);
+  await personRow("Dana Kim").locator("[data-contact-delete]").click();
+  await page.locator(".people-dialog h2").getByText("Delete Dana Kim?").waitFor();
+  await page.locator(".people-dialog [data-delete-confirm]").click();
+  await personRow("Dana Kim").waitFor({ state:"detached" });
+  assert.deepEqual(await peopleNames(), ["Alex Jones"]);
+  assert.deepEqual((await page.evaluate(() => window.calls)).filter(([name]) => name === "groupLeave" || name === "contactDelete"),
+    [["groupLeave", "grp_foreign"], ["contactDelete", "con_dana"]]);
+
   await page.locator('[data-view="relays"]').click();
   assert.equal(await page.locator("#cvSearch").isVisible(), false);
   assert.deepEqual(errors, []);
   assert.deepEqual(external, []);
-  console.log("PASS: one field finds and adds, Groups then People A–Z, group decks, group creation/members, search narrowing (by group or member) and bold prefixes, borderless field, contact success/miss/error, invite copy, native and expanded layout.");
+  console.log("PASS: one field finds and adds, Groups then People A–Z, group decks, group creation/members, search narrowing (by group or member) and bold prefixes, borderless field, contact success/miss/error, invite copy, row menus (delete contact, leave group), native and expanded layout.");
 } finally { await browser.close(); }

@@ -16,7 +16,16 @@ function createDaemonProgress({ packageRoot, version, homeDir = os.homedir(), pi
   return {
     advance(phase = "running") { state = { ...state, phase, at: now(), sequence: state.sequence + 1 }; save(); },
     component(name, status) { if (state.components[name] !== status) { state.components[name] = status; save(); } },
-    snapshot() { return { ...state, components: { ...state.components } }; },
+    // The last failure of each part, as a closed code (see diagnostics.cjs
+    // classifyFailure) and the job it happened in. Kept after the part
+    // recovers, so the fleet can see what last went wrong and when.
+    componentError(name, { stage, code, at }) {
+      const previous = state.componentErrors?.[name];
+      if (previous && previous.stage === stage && previous.code === code && at - previous.at < 60_000) return;
+      state = { ...state, componentErrors: { ...(state.componentErrors || {}), [name]: { stage, code, at } } };
+      save();
+    },
+    snapshot() { return { ...state, components: { ...state.components }, componentErrors: { ...(state.componentErrors || {}) } }; },
     async waiting(operation, phase = "offline") {
       // Explicit local control progress while authentication/network is pending.
       // It reports a wait, never successful delivery or signed-in operation.

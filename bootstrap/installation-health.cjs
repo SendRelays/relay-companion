@@ -55,7 +55,11 @@ function macPillLaunch({ homeDir, current, run }) {
     const code = String(error?.code || error?.message || "unknown").split(/[:\s]/)[0].slice(0, 40);
     // A check that timed out learned nothing about the registration.
     if (code === "check-timed-out") return null;
-    return { ok: false, reason: `registration-invalid: ${code}` };
+    // Which check failed (plutil-exit-1, wrong-label, ...), and whether macOS
+    // has the service loaded anyway: an invalid file that launchd still runs
+    // differs from one that will not start Relay after the next log-in.
+    const detail = /^[a-z0-9-]{1,30}$/.test(String(error?.detail || "")) ? `/${error.detail}` : "";
+    return { ok: false, reason: `registration-invalid: ${code}${detail}`.slice(0, 80), loaded: launchdLoaded(mac, run) };
   }
   if (record.releaseExecutable) {
     const identity = require("./mac-background-identity.cjs");
@@ -67,6 +71,14 @@ function macPillLaunch({ homeDir, current, run }) {
   }
   if (current?.packageRoot && record.packageRoot !== current.packageRoot) return { ok: false, reason: "registration-not-active-runtime" };
   return { ok: true, reason: null };
+}
+
+// true or false when launchd answered; null when it could not be asked.
+function launchdLoaded(mac, run) {
+  try {
+    const state = mac.registration(PILL_LABEL, { run });
+    return state.present ? true : state.known ? false : null;
+  } catch { return null; }
 }
 
 function macPillLastExit(run) {
@@ -138,7 +150,15 @@ function collectInstallationHealth({ homeDir = os.homedir(), platform = process.
   const componentNames = ["inbox-background", "agent-sessions", "topics", "tasks"];
   const unhealthyComponents = progressMatches ? componentNames.filter(name => ["failed", "stalled"].includes(progress.components?.[name])) : [];
   const pill = pillLiveness({ homeDir, platform, env, live, current, run, now });
-  let serviceHealth = { state: "healthy", reason: "ready", components: unhealthyComponents };
+  // Each part's last failure from the daemon's health file: which job and what
+  // kind (closed codes, never messages), newest first, from the last day.
+  const LABEL = /^[a-z0-9_-]{1,40}$/;
+  const errors = progressMatches ? Object.entries(progress.componentErrors || {})
+    .filter(([name, item]) => LABEL.test(name) && LABEL.test(item?.stage || "") && LABEL.test(item?.code || "")
+      && Number.isFinite(item.at) && item.at <= now && now - item.at < 24 * 60 * 60_000)
+    .sort((a, b) => b[1].at - a[1].at).slice(0, 4)
+    .map(([name, item]) => ({ component: name, stage: item.stage, code: item.code, at: new Date(item.at).toISOString() })) : [];
+  let serviceHealth = { state: "healthy", reason: "ready", components: unhealthyComponents, ...(errors.length ? { errors } : {}) };
   if (!activeVersion) serviceHealth = { ...serviceHealth, state: "unverified", reason: "runtime-not-active" };
   else if (!live?.daemon) serviceHealth = { ...serviceHealth, state: "failed", reason: "daemon-missing" };
   else if (!daemonResponsive) serviceHealth = { ...serviceHealth, state: "failed", reason: "daemon-not-responsive" };

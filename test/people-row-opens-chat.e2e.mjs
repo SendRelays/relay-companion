@@ -351,11 +351,11 @@ try {
   await clickUntil(page, '[data-view="contacts"]', `activeView === "contacts"`, "People");
   await until(page, `Boolean(document.querySelector('.cv-item[data-contact="c_sven"]'))`, "the people list");
 
-  // The Edit control is a hover affordance; force it visible for the record.
+  // The ⋯ menus are a hover affordance; force them visible for the record.
   await evaluate(page, `(() => {
     const style = document.createElement("style");
     style.id = "probe-hover";
-    style.textContent = '.cv-item[data-contact="c_sven"] .cv-edit, .cvg-item[data-group="${GROUP_WITH_ROOM}"] .cvg-edit { opacity:1; color:var(--ink-2); }';
+    style.textContent = '#contactsView .cv-person-more { opacity:1; }';
     document.head.appendChild(style);
     return true;
   })()`);

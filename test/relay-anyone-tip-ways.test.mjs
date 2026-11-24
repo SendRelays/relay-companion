@@ -7,8 +7,9 @@ const require = createRequire(import.meta.url);
 const { EXAMPLES, WAYS, TITLE, pickWays, titleFor, firstName } = require("../overlay/relay-anyone-tip.cjs");
 const ids = (ways) => ways.map((way) => way.id);
 const FIRST_FOUR_DONE = { createdShareLink: true, sentToSelf: true, openedReceivedRelay: true, agentListedInbox: true };
-// The fixed five gone: the first four used, and Pull your work together read.
-const FIRST_FIVE_GONE = { ...FIRST_FOUR_DONE, readPullTogether: true };
+// The fixed five gone: the first four used, Pull your work together read,
+// and See it before it goes read too.
+const FIRST_FIVE_GONE = { ...FIRST_FOUR_DONE, readPullTogether: true, readCheckDraft: true };
 const prompts = (ways) => Object.fromEntries(ways.map((way) => [way.id, way.prompt]));
 
 test("a new account, or a server that reports nothing, gets the fixed five", () => {
@@ -27,10 +28,20 @@ test("pull your work together is shown once: read on this card, or read for the 
   assert.ok(ids(pickWays(FIRST_FOUR_DONE, {}, new Set(["send_files"]))).includes("send_files"), "only a once way is retired by reading it");
 });
 
+test("asking for a draft is shown once, as soon as the fixed five start to go", () => {
+  assert.equal(WAYS.find((way) => way.id === "check_draft").once, true);
+  assert.ok(!ids(pickWays({})).includes("check_draft"), "a new account keeps the fixed five");
+  assert.ok(ids(pickWays(FIRST_FOUR_DONE)).includes("check_draft"));
+  assert.ok(!ids(pickWays(FIRST_FOUR_DONE, {}, new Set(["check_draft"]))).includes("check_draft"), "read on this card");
+  assert.ok(!ids(pickWays({ ...FIRST_FOUR_DONE, readCheckDraft: true })).includes("check_draft"), "read on any of the account's computers");
+  const own = pickWays(FIRST_FOUR_DONE, { recent: ["Jonty Quenet"] }).find((way) => way.id === "check_draft");
+  assert.equal(own.prompt, "Draft a Relay to Jonty about this and show me before you send it.");
+});
+
 test("a way retires once used and the next most useful takes its place", () => {
-  assert.deepEqual(ids(pickWays({ createdShareLink: true })), ["pick_up", "carry_on", "check_inbox", "pull_together", "send_files"]);
+  assert.deepEqual(ids(pickWays({ createdShareLink: true })), ["pick_up", "carry_on", "check_inbox", "pull_together", "check_draft"]);
   assert.equal(titleFor(pickWays({ createdShareLink: true })), "Five more ways to use Relay");
-  assert.deepEqual(ids(pickWays(FIRST_FOUR_DONE)), ["pull_together", "send_files", "ask_question", "ask_feedback", "hand_over"]);
+  assert.deepEqual(ids(pickWays(FIRST_FOUR_DONE)), ["pull_together", "check_draft", "send_files", "ask_question", "ask_feedback"]);
   assert.deepEqual(ids(pickWays(FIRST_FIVE_GONE)), ["send_files", "ask_question", "ask_feedback", "hand_over", "relay_group"]);
 });
 

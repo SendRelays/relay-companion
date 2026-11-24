@@ -47,6 +47,41 @@ test("a stuck optional component never overlaps and reports degraded health, the
   assert.equal(health.snapshot().components["agent-sessions"], "ok");
 });
 
+test("a failing part records which job and what kind of failure, at most once per 15 minutes", async () => {
+  const { health, advance } = healthFixture();
+  const recorded = [];
+  const runner = createDaemonComponents({ health, now: () => health.snapshot().at, stalledMs: 10, record: event => recorded.push(event) });
+  const failOnce = () => runner.run("inbox-background", track => Promise.all([
+    track("attachments", Promise.resolve()),
+    track("task-wakes", Promise.reject(new SyntaxError("Unexpected token } in JSON"))),
+  ]));
+  await failOnce();
+  await failOnce();
+  assert.deepEqual(recorded.map(event => [event.component, event.stage, event.outcome, event.code]), [["daemon", "task-wakes", "failed", "file-corrupt"]]);
+  assert.equal(health.snapshot().components["inbox-background"], "failed");
+  assert.deepEqual(health.snapshot().componentErrors["inbox-background"], { stage: "task-wakes", code: "file-corrupt", at: health.snapshot().at });
+  advance(15 * 60_000 + 1); health.advance();
+  await failOnce();
+  assert.equal(recorded.length, 2, "recorded again once the 15 minutes have passed");
+});
+
+test("a stalled part names the job that is still running", async () => {
+  const { health, advance } = healthFixture();
+  const recorded = [];
+  const runner = createDaemonComponents({ health, now: () => health.snapshot().at, stalledMs: 10, record: event => recorded.push(event) });
+  let finish;
+  const pending = runner.run("inbox-background", track => Promise.all([
+    track("attachments", Promise.resolve()),
+    track("task-wakes", new Promise(resolve => { finish = resolve; })),
+  ]));
+  await flush(); advance(20); health.advance();
+  runner.inspect(); runner.inspect();
+  assert.deepEqual(recorded.map(event => [event.stage, event.code]), [["task-wakes", "component-stalled"]]);
+  assert.equal(recorded[0].elapsedMs, 20);
+  finish(); await pending;
+  assert.equal(health.snapshot().components["inbox-background"], "ok");
+});
+
 test("hung task and agent operations cannot stop the real receiver scheduler or duplicate work", async () => {
   const { health } = healthFixture();
   const client = { token: "test", url: "https://example.invalid", accountDrift: () => ({ status: "same" }) };

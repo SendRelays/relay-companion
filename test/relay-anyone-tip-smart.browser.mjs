@@ -53,11 +53,11 @@ try {
 
   // Someone who has made a share link is not taught to make one.
   assert.equal(await title(), "Five more ways to use Relay");
-  assert.deepEqual(await wayNames(), ["Pick up where you left off", "Carry on work someone sent you", "Check what needs you", "Pull your work together", "Send files"]);
+  assert.deepEqual(await wayNames(), ["Pick up where you left off", "Carry on work someone sent you", "Check what needs you", "Pull your work together", "See it before it goes"]);
   // The examples use the person's own people: who is waiting, and who they relay with.
   const promptOf = (way) => page.locator(".rat-slide").filter({has:page.locator(".rat-way", {hasText:way})}).locator(".rat-prompt").innerText();
   assert.equal(await promptOf("Carry on work someone sent you"), "“Open the Relay from Dylan and carry on the work here.”");
-  assert.equal(await promptOf("Send files"), "“Relay Jonty the files in this folder.”");
+  assert.equal(await promptOf("See it before it goes"), "“Draft a Relay to Jonty about this and show me before you send it.”");
   assert.equal(await page.getByRole("button", {name:"Expand tip: Five more ways to use Relay",exact:true}).count(), 1);
 
   // A way used while the card is open stays until the person is done with it.
@@ -77,16 +77,20 @@ try {
 
   // Pull your work together is shown once: on screen in the open card, then
   // gone at the next refresh, and the read is reported so it stays gone.
-  assert.deepEqual(await wayNames(), ["Carry on work someone sent you", "Check what needs you", "Pull your work together", "Send files", "Ask someone a question"]);
+  assert.deepEqual(await wayNames(), ["Carry on work someone sent you", "Check what needs you", "Pull your work together", "See it before it goes", "Send files"]);
   assert.equal(await page.evaluate(() => window.teaching.some(([name]) => name === "example_read")), false, "not read before it is on screen");
   await page.getByRole("button", {name:"Example 3 of 5",exact:true}).click();
   await page.clock.runFor(400);
   assert.equal(await current(), "Pull your work together");
   assert.deepEqual(await page.evaluate(() => window.teaching.filter(([name]) => name === "example_read")), [["example_read", "pull_together"]]);
   await page.getByRole("button", {name:"Example 4 of 5",exact:true}).click();
+  await page.clock.runFor(400);
+  assert.equal(await current(), "See it before it goes");
+  assert.deepEqual(await page.evaluate(() => window.teaching.filter(([name]) => name === "example_read")), [["example_read", "pull_together"], ["example_read", "check_draft"]]);
   assert.ok((await wayNames()).includes("Pull your work together"), "it stays while the card is open");
   await page.getByRole("button", {name:"Minimise tip",exact:true}).click();
   assert.ok(!(await wayNames()).includes("Pull your work together"), "gone at the next refresh");
+  assert.ok(!(await wayNames()).includes("See it before it goes"), "asking for a draft too");
   await push({usage:{...await page.evaluate(() => window.fixture.usage)}});
   assert.ok(!(await wayNames()).includes("Pull your work together"), "and it does not come back before the server has heard");
   await page.locator(".rat-summary").click();
@@ -124,5 +128,5 @@ try {
   const chosen = await page.evaluate(() => window.teaching.filter(([name]) => name === "example_chosen").at(-1));
   assert.deepEqual(chosen, ["example_chosen", "send_task"]);
   assert.deepEqual(errors, []);
-  console.log("PASS: smart card retires used ways, waits while open, keeps the selected example, single way without dots, hides when done, fixed five without the gate, engagement ids, own people in examples, Pull your work together shown once.");
+  console.log("PASS: smart card retires used ways, waits while open, keeps the selected example, single way without dots, hides when done, fixed five without the gate, engagement ids, own people in examples, Pull your work together and See it before it goes shown once.");
 } finally { await browser.close(); }

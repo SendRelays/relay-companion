@@ -1140,10 +1140,9 @@
   .cvg-sub { font-family:var(--serif); font-size:14.5px; line-height:1.2; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:2px; }
   .cvg-meta { flex:0 0 auto; align-self:flex-start; display:flex; flex-direction:column; align-items:flex-end; gap:4px; padding-top:1px; }
   .cvg-count { font-size:11px; color:var(--muted-2); font-variant-numeric:tabular-nums; white-space:nowrap; }
-  /* Same affordance as a person's row: the roster is one hover away, and the
+  /* Same affordance as a person's row: the ⋯ menu is one hover away, and the
      row itself belongs to the conversation. */
-  .cvg-edit { flex:0 0 auto; color:var(--muted-2); font-size:11px; font-weight:600; opacity:0; transition:opacity var(--t-fast) var(--settle), color var(--t-fast) var(--settle); }
-  .cvg-item:hover .cvg-edit, .cvg-item:focus-visible .cvg-edit { opacity:1; color:var(--ink-2); }
+  .cvg-row .cvg-item { flex:1; min-width:0; width:auto; border-bottom:0; padding-right:4px; }
   /* Somebody else's roster. Readable, never editable — the badge is what stops
      a member hunting for a Rename button that would only ever 404. */
   .cvg-badge { font-size:10px; font-weight:600; letter-spacing:0.02em; color:var(--muted-2); background:var(--wash-2); border-radius:var(--r-1); padding:2px 6px; white-space:nowrap; }
@@ -14928,6 +14927,7 @@
       <button class="cv-person-more" type="button" aria-label="More actions for ${esc(c.name || primary)}" aria-haspopup="menu" aria-expanded="false" aria-controls="person-menu-${index}" data-message-more>⋯</button>
       <div class="th-message-menu" id="person-menu-${index}" popover="auto" role="menu" aria-label="Actions for ${esc(c.name || primary)}">
         <button type="button" role="menuitem" data-contact-edit="${esc(contactKey(c))}">Edit contact</button>
+        ${contactRowId(c) ? `<button type="button" role="menuitem" class="danger" data-contact-delete="${esc(contactKey(c))}">Delete contact…</button>` : ""}
         ${canBlockPerson(c) ? `<button type="button" role="menuitem" class="danger" data-contact-block="${esc(contactKey(c))}">Block contact…</button>` : ""}
       </div>
       </div>`;
@@ -14959,6 +14959,16 @@
         openPersonBlock(button.dataset.contactBlock, trigger);
       });
     }
+    for (const button of cvListEl.querySelectorAll("[data-contact-delete]")) {
+      button.addEventListener("click", () => {
+        const trigger = button.closest(".cv-person").querySelector("[data-message-more]");
+        button.closest("[popover]").hidePopover();
+        openPersonDelete(button.dataset.contactDelete, trigger);
+      });
+    }
+  }
+  function contactRowId(person) {
+    return person && (person.id || person.contactId) ? String(person.id || person.contactId) : "";
   }
   function canBlockPerson(person) {
     return Boolean(person.id && person.relayUserId && person.onRelay !== false
@@ -15010,6 +15020,39 @@
     peopleDialog.querySelector("[data-dialog-close]")?.focus();
     peopleDialog.querySelector("[data-dialog-close]")?.addEventListener("click", closePeopleDialog);
     return () => peopleDialog.matches(":popover-open") && generation === peopleDialogGeneration && peopleDialogAccount === signupAccountKey();
+  }
+  // Same confirmation shape as Block: the menu item only asks, the dialog acts.
+  function openPersonDelete(key, trigger) {
+    const person = contactsList.find((contact) => contactKey(contact) === key);
+    const contactId = contactRowId(person);
+    if (!contactId) return;
+    const name = person.name || contactEmails(person)[0] || "this contact";
+    const current = showPeopleDialog(`<h2 id="peopleDialogTitle">Delete ${esc(name)}?</h2>
+      <p>They leave your contacts. Your conversations with them stay, and you can add them again later.</p>
+      <div class="people-dialog-error" role="alert"></div><div class="people-dialog-actions">
+      <button class="cv-cancel" type="button" data-dialog-close autofocus>Cancel</button>
+      <button class="danger" type="button" data-delete-confirm>Delete contact</button></div>`, trigger);
+    peopleDialog.querySelector("[data-delete-confirm]")?.addEventListener("click", async (event) => {
+      if (!current()) { closePeopleDialog(); return; }
+      const button = event.currentTarget;
+      if (button.disabled) return;
+      button.disabled = true;
+      button.textContent = "Deleting…";
+      const res = await contactWriteResult(window.relay.contactDelete({ contactId }), "Could not delete this contact. Try again.");
+      if (!current()) return;
+      if (!res.ok) {
+        peopleDialog.querySelector(".people-dialog-error").textContent = res.error;
+        button.disabled = false; button.textContent = "Delete contact";
+        return;
+      }
+      // The row is gone server-side even if the refresh didn't come back.
+      if (Array.isArray(res.contacts)) contactsList = res.contacts;
+      else contactsList = contactsList.filter((c) => contactRowId(c) !== contactId);
+      peopleDialogReturnFocus = null; // its row is gone
+      closePeopleDialog();
+      renderContacts();
+      if (wideLayoutActive()) syncWidePane();
+    });
   }
   function openPersonBlock(key, trigger) {
     const person = contactsList.find((contact) => contactKey(contact) === key);
@@ -15531,6 +15574,48 @@
     if (!groupInfoBackdropEl.classList.contains("hidden") && groupInfoGroup) renderGroupInfo();
   }
 
+  function afterGroupLeft(groupId) {
+    leftGroupIds.add(groupId);
+    groupsList = groupsList.filter((group) => group.id !== groupId);
+    groupsLoaded = true;
+    groupLeaveArmedId = null;
+    if (cvgExpandedId === groupId) cvgExpandedId = null;
+    closeGroupInfo();
+    renderGroups();
+    renderThreadDetail();
+    if (window.relay.refresh) window.relay.refresh().catch(() => {});
+  }
+
+  // Leave from the row's ⋯ menu: the same server call and the same words as
+  // the group page's Leave, confirmed in the anchored people dialog.
+  function openGroupLeave(groupId, trigger) {
+    const g = groupsList.find((group) => group.id === groupId);
+    if (!g || g.owned !== false || g.archivedAt) return;
+    const current = showPeopleDialog(`<h2 id="peopleDialogTitle">Leave ${esc(g.name || "this group")}?</h2>
+      <p>You’ll stop receiving new messages. Your existing messages will remain in Relays.</p>
+      <div class="people-dialog-error" role="alert"></div><div class="people-dialog-actions">
+      <button class="cv-cancel" type="button" data-dialog-close autofocus>Cancel</button>
+      <button class="danger" type="button" data-leave-confirm>Leave group</button></div>`, trigger);
+    peopleDialog.querySelector("[data-leave-confirm]")?.addEventListener("click", async (event) => {
+      if (!current()) { closePeopleDialog(); return; }
+      const button = event.currentTarget;
+      if (button.disabled) return;
+      button.disabled = true;
+      button.textContent = "Leaving…";
+      let res = null;
+      try { res = await window.relay.groupLeave(g.id); } catch (error) { res = { ok:false, error:String(error?.message || error) }; }
+      if (!current()) return;
+      if (!res || res.ok !== true) {
+        peopleDialog.querySelector(".people-dialog-error").textContent = res?.error || "Could not leave this group. Try again.";
+        button.disabled = false; button.textContent = "Leave group";
+        return;
+      }
+      peopleDialogReturnFocus = null; // its row is gone
+      closePeopleDialog();
+      afterGroupLeft(g.id);
+    });
+  }
+
   function bindGroupDetails(container, g, { sheet = false } = {}) {
     const back = container.querySelector("[data-gd-back]");
     if (back) back.addEventListener("click", () => {
@@ -15549,15 +15634,7 @@
       leaveConfirm.disabled = true;
       const result = await groupDetailCall(container, window.relay.groupLeave, g.id);
       if (!result) { leaveConfirm.disabled = false; return; }
-      leftGroupIds.add(g.id);
-      groupsList = groupsList.filter((group) => group.id !== g.id);
-      groupsLoaded = true;
-      groupLeaveArmedId = null;
-      cvgExpandedId = null;
-      closeGroupInfo();
-      renderGroups();
-      renderThreadDetail();
-      if (window.relay.refresh) window.relay.refresh().catch(() => {});
+      afterGroupLeft(g.id);
     });
     for (const button of container.querySelectorAll("[data-gd-remove]")) {
       button.addEventListener("click", async () => {
@@ -15709,21 +15786,30 @@
     document.getElementById("cvgNew").classList.toggle("gone", Boolean(cvQuery));
     cvgMoreEl.hidden = hidden <= 0;
     cvgMoreEl.textContent = hidden > 0 ? `Show ${hidden} more` : "";
-    cvgListEl.innerHTML = shown.map((g) => {
+    cvgListEl.innerHTML = shown.map((g, index) => {
       const roster = groupInfoRoster(g);
       const archived = Boolean(g.archivedAt);
+      const mine = g.owned !== false;
       // A deck for a group, a circle for a person.
       const tile = groupAvatarStack(g, roster);
       const others = groupOthers(roster);
       const sub = others.length ? groupMemberSummary(others) : roster.length ? "Just you" : groupMemberSummary(roster);
-      return `<button class="cvg-item" type="button" data-group="${esc(g.id)}">
+      // The same ⋯ menu a person's row has. Only a member can leave: the
+      // creator archives the group from its page instead.
+      return `<div class="cv-person cvg-row">
+      <button class="cvg-item" type="button" data-group="${esc(g.id)}">
         <span class="cvg-stack">${tile}</span>
         <span class="cvg-body">
           <span class="cvg-name">${cvMarkHtml(g.name, cvQuery)}</span>
           <span class="cvg-sub">${esc(archived ? `Archived · ${sub}` : sub)}</span>
         </span>
-        <span class="cvg-edit" role="button" tabindex="0" data-group-edit="${esc(g.id)}">Edit</span>
-      </button>`;
+      </button>
+      <button class="cv-person-more" type="button" aria-label="More actions for ${esc(g.name || "group")}" aria-haspopup="menu" aria-expanded="false" aria-controls="group-menu-${index}" data-message-more>⋯</button>
+      <div class="th-message-menu" id="group-menu-${index}" popover="auto" role="menu" aria-label="Actions for ${esc(g.name || "group")}">
+        <button type="button" role="menuitem" data-group-edit="${esc(g.id)}">${mine && !archived ? "Edit group" : "Group details"}</button>
+        ${!mine && !archived ? `<button type="button" role="menuitem" class="danger" data-group-leave="${esc(g.id)}">Leave group…</button>` : ""}
+      </div>
+      </div>`;
     }).join("");
     renderPeopleGroupDetail();
     wireGroupRows();
@@ -15778,20 +15864,23 @@
       });
     }
     for (const el of cvgListEl.querySelectorAll("[data-group-edit]")) {
-      const open = (event) => {
+      el.addEventListener("click", (event) => {
         event.stopPropagation(); // the roster, not the room
+        el.closest("[popover]")?.hidePopover();
         const id = el.getAttribute("data-group-edit");
         const closing = cvgExpandedId === id;
         cvgExpandedId = closing ? null : id;
         cvgDeleteArmedId = null; cvgRenamingId = null;
         cvgShowError("");
         renderGroups();
-      };
-      el.addEventListener("click", open);
-      el.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        open(event);
+      });
+    }
+    wireMessageSideMenus(cvgListEl);
+    for (const button of cvgListEl.querySelectorAll("[data-group-leave]")) {
+      button.addEventListener("click", () => {
+        const trigger = button.closest(".cvg-row").querySelector("[data-message-more]");
+        button.closest("[popover]").hidePopover();
+        openGroupLeave(button.dataset.groupLeave, trigger);
       });
     }
     for (const el of cvgListEl.querySelectorAll("[data-unmember]")) {
@@ -23723,7 +23812,7 @@
     // The row whose thing is already open does nothing: no reload, no flash,
     // no jump to the bottom. In a chat the caret just goes back to its reply.
     if (!wideSideActivation || !wideLitSelector || !wideLayoutActive()) return;
-    if (event.target.closest("[data-stop], [data-message-more], .row-delete, .cv-person-more, .cvg-edit, input, textarea")) return;
+    if (event.target.closest("[data-stop], [data-message-more], .row-delete, .cv-person-more, input, textarea")) return;
     const row = event.target.closest(".relay-row, .row, .cv-item, .cvg-item, [data-topic-open]");
     if (!row || !(row.matches(wideLitSelector) || row.closest(wideLitSelector))) return;
     event.stopPropagation();

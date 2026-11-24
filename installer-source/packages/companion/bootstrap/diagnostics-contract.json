@@ -4,7 +4,8 @@
     "recovery",
     "launcher",
     "collector",
-    "unknown"
+    "unknown",
+    "daemon"
   ],
   "stages": [
     "discovery",
@@ -17,7 +18,15 @@
     "local-fallback",
     "services",
     "health",
-    "unknown"
+    "unknown",
+    "inbox-background",
+    "attachments",
+    "task-wakes",
+    "agent-sessions",
+    "topics",
+    "tasks",
+    "process-query",
+    "report"
   ],
   "outcomes": [
     "started",
@@ -87,7 +96,13 @@
     "runtime-node-missing",
     "runtime-npm-missing",
     "interrupted-by-sleep",
-    "check-timed-out"
+    "check-timed-out",
+    "file-corrupt",
+    "server-error",
+    "server-refused",
+    "component-stalled",
+    "worker-out-of-memory",
+    "collection-cancelled"
   ],
   "runtimeStates": [
     "active",

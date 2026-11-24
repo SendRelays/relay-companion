@@ -59,6 +59,9 @@
   // it has been on screen in the open card, by rotation or by scrolling past
   // (Shane, 2026-10-07). The server remembers that for the account
   // (`readPullTogether`); the card also remembers it until it restarts.
+  // "See it before it goes" is read the same way (`readCheckDraft`): agents
+  // send when asked, so the card teaches asking for a draft (Shane,
+  // 2026-11-24).
   const [shareLink, pickUp, carryOn, checkInbox, pullTogether] = EXAMPLES;
   const WAYS = Object.freeze([
     { ...shareLink, done: (u) => u.createdShareLink },
@@ -73,6 +76,18 @@
     },
     { ...checkInbox, done: (u) => u.agentListedInbox },
     { ...pullTogether, once: true, done: (u) => u.readPullTogether },
+    {
+      id: "check_draft",
+      way: "See it before it goes",
+      prompt: "Draft a Relay to Sam about the pricing page and show me before you send it.",
+      result: "You see what Sam will read and what their agent gets, and it goes only when you say so.",
+      once: true,
+      done: (u) => u.readCheckDraft,
+      personal: (p) => { const who = p.next(); return who && {
+        prompt: `Draft a Relay to ${who} about this and show me before you send it.`,
+        result: `You see what ${who} will read and what their agent gets, and it goes only when you say so.`,
+      }; },
+    },
     {
       id: "send_files",
       way: "Send files",

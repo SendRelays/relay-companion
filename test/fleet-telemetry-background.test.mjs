@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
@@ -107,6 +108,25 @@ test("clock rollback and synchronous setup failure never return stale health", a
   assert.equal(bad.header(), "");
   await flush();
   assert.equal(bad.header(), "");
+});
+
+test("a failed collection records which step failed and why, and a sleep is not a failure", async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "relay-telemetry-cause-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, ".relay"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".relay", "config.json"), JSON.stringify({ user: { id: "usr_test" }, deviceId: "dev_test" }));
+  const diagnostics = createRequire(import.meta.url)("../bootstrap/diagnostics.cjs");
+  const recorded = () => diagnostics.events(home, diagnostics.configIdentity(home).scope).map(({ value }) => [value.component, value.stage, value.outcome, value.code]);
+  const failure = Object.assign(new Error("query"), { diagnosticStage: "process-query", diagnosticCode: "timeout" });
+  let slept = 0;
+  const cache = createFleetTelemetryCache({ context: () => ({ key: "k", homeDir: home }), collect: async () => { throw failure; }, slept: () => slept, retryMs: 0 });
+  t.after(() => cache.reset());
+  cache.header(); await flush(); await flush();
+  assert.deepEqual(recorded(), [["collector", "process-query", "failed", "timeout"]]);
+  const asleep = createFleetTelemetryCache({ context: () => ({ key: "k", homeDir: home }), collect: async () => { slept += 120_000; throw failure; }, slept: () => slept });
+  t.after(() => asleep.reset());
+  asleep.header(); await flush(); await flush();
+  assert.deepEqual(recorded().at(-1), ["collector", "process-query", "deferred", "interrupted-by-sleep"]);
 });
 
 function tempContext(t) {

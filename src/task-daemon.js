@@ -1168,12 +1168,13 @@ export async function runReceiverLoop({ client, me, intervalMs = 4000, log = () 
       features = await refreshFeatures(client, features, log);
       featureRefreshAt = Date.now() + ACCOUNT_FEATURE_REFRESH_MS;
     }
-    void components.run("inbox-background", async () => {
+    void components.run("inbox-background", async (track = (_stage, promise) => promise) => {
       const backgroundClient = makeClient();
       const isCurrent = () => backgroundClient.accountDrift().status === "same" && backgroundClient.url === secureRelayApiUrl(apiUrl());
+      // Named jobs: a failure or a hang is reported as attachments or task-wakes.
       const results = await Promise.allSettled([
-        attachments({ scope: inboxAccountScope(backgroundClient), isCurrent, log }),
-        completionWakes({ log }),
+        track("attachments", Promise.resolve().then(() => attachments({ scope: inboxAccountScope(backgroundClient), isCurrent, log }))),
+        track("task-wakes", Promise.resolve().then(() => completionWakes({ log }))),
       ]);
       const failed = results.find(result => result.status === "rejected");
       if (failed) throw failed.reason;

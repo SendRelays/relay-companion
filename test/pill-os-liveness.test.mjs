@@ -99,7 +99,9 @@ test("a pill the person quit is waiting on them, a hidden one is running by choi
 
   fs.rmSync(path.join(home.homeDir, "Library", "LaunchAgents", "work.relay.companion.pill.plist"));
   report = collect(home, [home.daemon]);
-  assert.deepEqual(report.pill.launch, { ok: false, reason: "registration-invalid: ENOENT" });
+  // The launch file is gone, but launchd still has the service loaded: Relay
+  // runs now and will not start after the next log-in.
+  assert.deepEqual(report.pill.launch, { ok: false, reason: "registration-invalid: ENOENT", loaded: true });
 });
 
 test("on Linux the unit's last result is read; elsewhere the OS facts are simply absent", (t) => {

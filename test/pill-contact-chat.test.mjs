@@ -163,10 +163,11 @@ test("opening a group in People opens its room; only Edit expands the roster", (
   const edit = between(rows, "[data-group-edit]", "\n    }");
   assert.match(edit, /event\.stopPropagation\(\)/);
   assert.match(edit, /const closing = cvgExpandedId === id/);
-  assert.match(edit, /if \(event\.key !== "Enter" && event\.key !== " "\) return;/);
-  // The control has to exist on the row for any of that to be reachable.
-  assert.match(html, /<span class="cvg-edit" role="button" tabindex="0" data-group-edit="\$\{esc\(g\.id\)\}">Edit<\/span>/);
-  assert.match(html, /\.cvg-item:hover \.cvg-edit, \.cvg-item:focus-visible \.cvg-edit \{ opacity:1;/);
+  assert.match(edit, /el\.closest\("\[popover\]"\)\?\.hidePopover\(\)/);
+  // The control lives in the row's ⋯ menu, beside Leave, like a person's row.
+  assert.match(html, /<button type="button" role="menuitem" data-group-edit="\$\{esc\(g\.id\)\}">\$\{mine && !archived \? "Edit group" : "Group details"\}<\/button>/);
+  assert.match(html, /aria-controls="group-menu-\$\{index\}" data-message-more>⋯<\/button>/);
+  assert.match(html, /\.cvg-row \.cvg-item \{ flex:1;/);
 
   const room = between(html, "function openGroupRoom(groupId)", "\n  function groupRoomPostingState");
   // Same law as a contact row: the pill's own room, People still lit.

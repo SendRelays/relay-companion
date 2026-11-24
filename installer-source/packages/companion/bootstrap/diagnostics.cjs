@@ -27,6 +27,18 @@ function errorCode(error) {
   ];
   return patterns.find(([pattern]) => pattern.test(text))?.[1] || "unclassified";
 }
+// What kind of failure a background part hit, in the same closed vocabulary:
+// never the message itself, which can hold paths or content. A server's error
+// page or refusal, a local file that is corrupt, and a lock that could not be
+// taken are told apart from the generic codes errorCode already knows.
+function classifyFailure(error) {
+  const status = Number(error?.status || error?.statusCode || 0);
+  if (error?.code === "non_json_response" || status >= 500) return "server-error";
+  if (status >= 400) return "server-refused";
+  if (error?.name === "SyntaxError" || error instanceof SyntaxError) return "file-corrupt";
+  if (/lock unavailable|lock-unavailable/i.test(String(error?.message || ""))) return "transaction-lock-unavailable";
+  return errorCode(error) || "unclassified";
+}
 function configIdentity(homeDir) {
   const config = read(path.join(homeDir, ".relay", "config.json"));
   // A new account must never upload its predecessor's diagnostic history.
@@ -155,4 +167,4 @@ function snapshot({ homeDir = os.homedir(), now = Date.now, env = process.env } 
     discoveryError: errorCode(recovery?.discoveryError),
   };
 }
-module.exports = { record, snapshot, events, configIdentity, read, errorCode, version, contract, MAX_EVENTS, MAX_AGE_MS };
+module.exports = { record, snapshot, events, configIdentity, read, errorCode, classifyFailure, version, contract, MAX_EVENTS, MAX_AGE_MS };

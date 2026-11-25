@@ -163,3 +163,19 @@ test("truncation diagnostics cannot break the bounded legacy header", () => {
   assert.ok(header.length < 4096);
   assert.deepEqual(JSON.parse(Buffer.from(header, "base64url")), { schema: 1 });
 });
+
+test("fleet telemetry carries the update loop's last decision, as labels and times only", () => {
+  const homeDir = temp();
+  const updateStatePath = path.join(homeDir, "update-state.json");
+  const telemetry = () => collectCompanionFleetTelemetry({ homeDir, platform: process.platform, channel: "dev", env: {}, updateStatePath, collectHealth: () => undefined });
+  assert.equal(telemetry().updateLoop, undefined, "absent until the loop has decided something");
+  fs.writeFileSync(path.join(homeDir, "update-loop.json"), JSON.stringify({
+    schema: 1, status: "check-failed", at: Date.parse("2026-11-25T10:00:00Z"), running: "0.1.648", latest: "not a version", pending: "0.1.649",
+    retryAt: Date.parse("2026-11-25T10:02:00Z"), reason: "Release Cooldown /Users/x", lastCheckAt: Date.parse("2026-11-25T09:59:30Z"),
+    checkFailures: 3, checkError: "enotfound",
+  }));
+  assert.deepEqual(telemetry().updateLoop, {
+    status: "check-failed", at: "2026-11-25T10:00:00.000Z", latest: null, pending: "0.1.649", retryAt: "2026-11-25T10:02:00.000Z",
+    reason: null, lastCheckAt: "2026-11-25T09:59:30.000Z", checkFailures: 3, checkError: "enotfound",
+  });
+});

@@ -1285,3 +1285,46 @@ test("no automatic update starts while the machine is asleep, and a slept-throug
   assert.notEqual(next.status, "deferred-backoff", "a slept-through failure adds no backoff");
   assert.equal(readUpdateFailure(path.join(root, "update-state.json")), null, "nor a persisted failure");
 });
+
+test("the update loop records why it is or is not updating, for the fleet report", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-update-loop-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packageRoot = path.join(os.homedir(), ".relay", "runtime", "releases", "test", "node_modules", "relay-companion");
+  let clock = 1_000_000, busy = true, registry = async () => "1.0.1";
+  const updater = createAutoUpdater({
+    platform: "darwin", packageRoot, now: () => clock,
+    getCurrentVersion: () => "1.0.0", getCurrentChannel: () => "dev",
+    getCanonicalRuntime: () => ({ packageRoot, version: "1.0.0" }), getCanonicalRuntimeState: () => null,
+    getLatestVersion: (options) => registry(options), updateStatePath: path.join(root, "update-state.json"),
+    hasActiveWork: () => busy, spawnUpdate: () => ({ status: "admitted", requestId: "loop-test", requestPath: "fake" }),
+    inspectRequest: () => ({ state: "admitted", workerPid: 1 }), checkIntervalMs: 60_000, restartCooldownMs: 0,
+  });
+  const loop = () => JSON.parse(fs.readFileSync(path.join(root, "update-loop.json"), "utf8"));
+
+  // An agent turn is running: the newer release waits, and the file says so.
+  assert.equal((await updater.tick()).status, "deferred-busy");
+  assert.deepEqual({ ...loop(), at: undefined }, { schema: 1, status: "deferred-busy", running: "1.0.0", latest: "1.0.1", pending: "1.0.1",
+    retryAt: null, reason: null, lastCheckAt: 1_000_000, checkFailures: 0, checkError: null, at: undefined });
+
+  // A tick with nothing due keeps the last real decision.
+  clock += 5000;
+  await updater.tick();
+  assert.equal(loop().status, "deferred-busy");
+
+  // A failing registry check is counted with a code, never a message.
+  busy = false;
+  registry = async () => { throw Object.assign(new Error("getaddrinfo ENOTFOUND registry.npmjs.org at /Users/sven/x"), { code: "ENOTFOUND" }); };
+  const fresh = createAutoUpdater({
+    platform: "darwin", packageRoot, now: () => clock,
+    getCurrentVersion: () => "1.0.0", getCurrentChannel: () => "dev",
+    getCanonicalRuntime: () => ({ packageRoot, version: "1.0.0" }), getCanonicalRuntimeState: () => null,
+    getLatestVersion: (options) => registry(options), updateStatePath: path.join(root, "fresh", "update-state.json"),
+    checkIntervalMs: 60_000, restartCooldownMs: 0,
+  });
+  assert.equal((await fresh.tick()).status, "check-failed");
+  const failed = JSON.parse(fs.readFileSync(path.join(root, "fresh", "update-loop.json"), "utf8"));
+  assert.equal(failed.status, "check-failed");
+  assert.equal(failed.checkFailures, 1);
+  assert.equal(failed.checkError, "enotfound");
+  assert.doesNotMatch(JSON.stringify(failed), /Users|getaddrinfo|registry\.npmjs/, "no message, path or host leaves the machine");
+});

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "SendRelays/relay",
-  "sourceSha": "f9090ac54969125805f4f0a70293df0e18e9e135",
+  "sourceSha": "a8727bbc7ffd4a78ab43b37f714eead02f837362",
   "files": {
     "packages/companion/bootstrap/application-bridge.cjs": "17f2a4d087cc09996c596b3e53033cc500dedb7f",
     "packages/companion/bootstrap/application-handoff.cjs": "cc857469bd3e01c1c2bd00816e5f4338083f0aaa",

@@ -98,6 +98,20 @@ export const UPDATE_FAILURE_ESCALATION_THRESHOLD = 3;
 // Manual `relay update` bypasses it (explicit user intent).
 export const DEFAULT_RESTART_COOLDOWN_MS = 10 * 60 * 1000;
 const UPDATE_STATE_FILE = "update-state.json";
+// The update loop's last decision (why it is or is not updating), read by the
+// fleet report so nobody has to ask a person for their update log.
+export const UPDATE_LOOP_FILE = "update-loop.json";
+const UPDATE_LOOP_REFRESH_MS = 5 * 60 * 1000;
+// Ticks that only mean "nothing was due this time": they do not replace the
+// last real decision.
+const UNREPORTED_LOOP_STATUSES = new Set(["not-due", "check-in-flight"]);
+
+// A short, stable error code for telemetry: never a message, path or URL.
+export function updateErrorCode(value) {
+  const raw = typeof value === "string" ? value : value && typeof value === "object" ? (value.code || value.name || "error") : "";
+  const code = String(raw || "").toLowerCase().replace(/[^a-z0-9_.:-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+  return code || null;
+}
 
 // ---- pure, unit-tested helpers ------------------------------------------
 
@@ -649,6 +663,8 @@ export function createAutoUpdater({
     ? Number(env.RELAY_UPDATE_RESTART_COOLDOWN_MS)
     : DEFAULT_RESTART_COOLDOWN_MS,
   updateStatePath = path.join(storeDir(), UPDATE_STATE_FILE),
+  // Beside the update state by default, so a test's private store keeps it too.
+  updateLoopPath = path.join(path.dirname(updateStatePath), UPDATE_LOOP_FILE),
   // Honour the persisted failure backoff. false = attempt right now regardless of how
   // many times this version has failed — used by manual `relay update`, where the user
   // is present, asked explicitly, and is very likely retrying because they JUST fixed
@@ -707,6 +723,7 @@ export function createAutoUpdater({
     lastCheckAt: 0,
     nextCheckAt: 0,
     consecutiveCheckFailures: 0,
+    lastCheckError: null,
     checking: false,
     pendingVersion: activeAttempt?.target || priorFailure?.target || null,
     pendingChannel: activeAttempt?.channel || (priorFailure ? bootChannel : null),
@@ -947,6 +964,8 @@ export function createAutoUpdater({
     const discoveryId = randomUUID();
     const diagnosticScope = diagnostics.configIdentity(os.homedir())?.scope || null;
     const recordDiscovery = (outcome, code, targetVersion) => {
+      if (outcome === "succeeded") state.lastCheckError = null;
+      else if (outcome === "failed") state.lastCheckError = updateErrorCode(code) || "unclassified";
       // Match the actual default store; injected/sandbox stores cannot write to
       // the real user's installation as a side effect of decision-only tests.
       if (path.dirname(updateStatePath) !== path.join(os.homedir(), ".relay-companion")) return;
@@ -1000,7 +1019,43 @@ export function createAutoUpdater({
     return { status: "discovered", current: runningVersion, latest };
   }
 
+  // Record the decision a tick reached, for the fleet report. Unchanged
+  // decisions are refreshed at most every five minutes; failures to write are
+  // never allowed to affect updating itself.
+  let lastLoopKey = "";
+  let lastLoopWrittenAt = 0;
+  function recordLoopDecision(result, t) {
+    try {
+      const status = String(result?.status || "unknown").slice(0, 60);
+      if (UNREPORTED_LOOP_STATUSES.has(status)) return;
+      const version = (value) => (typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value) ? value : null);
+      const decision = {
+        schema: 1,
+        status,
+        running: version(runningVersion),
+        latest: version(result?.latest),
+        pending: version(state.pendingVersion),
+        retryAt: Number.isFinite(result?.retryAt) ? result.retryAt : null,
+        reason: result?.reason ? updateErrorCode(result.reason) : null,
+        lastCheckAt: state.lastCheckAt || null,
+        checkFailures: state.consecutiveCheckFailures || 0,
+        checkError: state.lastCheckError || null,
+      };
+      const key = JSON.stringify({ ...decision, lastCheckAt: null });
+      if (key === lastLoopKey && t - lastLoopWrittenAt < UPDATE_LOOP_REFRESH_MS) return;
+      lastLoopKey = key;
+      lastLoopWrittenAt = t;
+      writeUpdateState(updateLoopPath, { ...decision, at: t });
+    } catch {}
+  }
+
   async function tick() {
+    const result = await tickOnce();
+    recordLoopDecision(result, now());
+    return result;
+  }
+
+  async function tickOnce() {
     if (!autoUpdateEnabled(env)) return { status: "disabled" };
     // Every admitted platform has an independent supervisor-owned worker and a
     // verified restart path: launchd, Scheduled Tasks, or a Linux systemd user

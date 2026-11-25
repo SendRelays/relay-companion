@@ -66,6 +66,31 @@ function failureTelemetry(updateState) {
   return failures;
 }
 
+const LOOP_VERSION = /^\d+\.\d+\.\d+$/;
+const LOOP_LABEL = /^[a-z0-9_.:-]{1,60}$/;
+
+// Why this computer is or is not updating, as its own update loop last
+// decided (auto-update.js, update-loop.json). Labels, versions, counts and
+// times only. Absent when the loop has not recorded a decision yet.
+function updateLoopTelemetry(file, readFileSync) {
+  const loop = readObject(file, readFileSync);
+  if (!loop || !LOOP_LABEL.test(String(loop.status || ""))) return undefined;
+  const version = (value) => (LOOP_VERSION.test(String(value || "")) ? String(value) : null);
+  const label = (value) => (LOOP_LABEL.test(String(value || "")) ? String(value) : null);
+  const count = Number(loop.checkFailures);
+  return {
+    status: String(loop.status),
+    at: isoFromMillis(loop.at),
+    latest: version(loop.latest),
+    pending: version(loop.pending),
+    retryAt: isoFromMillis(loop.retryAt),
+    reason: label(loop.reason),
+    lastCheckAt: isoFromMillis(loop.lastCheckAt),
+    checkFailures: Number.isFinite(count) && count > 0 ? Math.min(1_000_000, Math.floor(count)) : 0,
+    checkError: label(loop.checkError),
+  };
+}
+
 function autoUpdateEnabled(env) {
   const raw = String(env?.RELAY_AUTO_UPDATE ?? "").trim().toLowerCase();
   return !(raw === "0" || raw === "false" || raw === "off" || raw === "no");
@@ -102,11 +127,13 @@ export function collectCompanionFleetTelemetry({
   env = process.env,
   channel = updateChannel(),
   updateStatePath = path.join(storeDir(), "update-state.json"),
+  updateLoopPath = path.join(path.dirname(updateStatePath), "update-loop.json"),
   readFileSync = fs.readFileSync,
   collectHealth = collectInstallationHealth,
 } = {}) {
   const canonical = readCanonicalRuntimeState({ homeDir, platform, readFileSync });
   const updateState = readObject(updateStatePath, readFileSync);
+  const updateLoop = updateLoopTelemetry(updateLoopPath, readFileSync);
   const runtimeState = canonical?.state === "activating" || canonical?.state === "recovery-required"
     ? canonical.state
     : canonical?.active === true
@@ -124,6 +151,7 @@ export function collectCompanionFleetTelemetry({
     previousVersion: cleanVersion(canonical?.previous?.version),
     stateChangedAt: isoFromMillis(stateMillis),
     failures: failureTelemetry(updateState),
+    ...(updateLoop ? { updateLoop } : {}),
     skills: managedSkillTelemetry({ homeDir, env }),
     installation: collectHealth({ homeDir, platform }),
   };

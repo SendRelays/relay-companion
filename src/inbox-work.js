@@ -39,11 +39,19 @@ export function queueInboxAttachments({ item, packet }, { scope, file = inboxWor
   });
 }
 
+// A prefetch that has kept failing for this long, this many times, is given
+// up: the file still opens on demand from its link. Without a limit, files
+// whose storage had gone (HTTP 403) on Sven's Mac were retried every 15
+// minutes from September to November 2026. Both conditions must hold, so a
+// computer that is offline for a day still tries a new Relay's files many times.
+const GIVE_UP_AFTER_MS = 24 * 60 * 60_000;
+const GIVE_UP_AFTER_ATTEMPTS = 20;
+
 // Runs in the daemon, never the receiver worker. A failed download remains due
 // after restart. Network I/O happens outside the short cross-process queue lock.
 export async function processInboxAttachments({
   scope, isCurrent = () => true, log = () => {}, file = inboxWorkPath(),
-  statePath = companionStatePath(), now = Date.now,
+  statePath = companionStatePath(), now = Date.now, interrupted = () => false,
   materialize = async (row) => {
     const { materializeAttachmentFiles } = await import("./materializer.js");
     return materializeAttachmentFiles(row, { log });
@@ -55,6 +63,7 @@ export async function processInboxAttachments({
   for (const [id] of jobs) {
     if (!isCurrent()) return;
     let complete = false;
+    const startedAt = now();
     try {
       const row = readInboxJson(statePath)?.packets?.[id];
       if (!row) complete = true; // deleted/reset while queued
@@ -73,9 +82,18 @@ export async function processInboxAttachments({
     mutateQueue(file, scope, (state, saved) => {
       if (saved?.scope !== scope || !state.jobs[id] || !isCurrent()) return false;
       if (complete) delete state.jobs[id];
-      else {
+      else if ((() => { try { return interrupted(startedAt); } catch { return false; } })()) {
+        // The machine slept during this attempt: try again soon, uncounted.
+        state.jobs[id] = { ...state.jobs[id], nextAttemptAt: now() + 60_000 };
+      } else {
         const attempts = state.jobs[id].attempts + 1;
-        state.jobs[id] = { attempts, nextAttemptAt: now() + Math.min(900_000, 5_000 * 2 ** Math.min(attempts, 8)) };
+        const failingSince = Number(state.jobs[id].failingSince) || now();
+        if (attempts >= GIVE_UP_AFTER_ATTEMPTS && now() - failingSince >= GIVE_UP_AFTER_MS) {
+          delete state.jobs[id];
+          log(`attachment prefetch for ${id} gave up after ${attempts} attempts; its files still open from their links`);
+        } else {
+          state.jobs[id] = { attempts, failingSince, nextAttemptAt: now() + Math.min(900_000, 5_000 * 2 ** Math.min(attempts, 8)) };
+        }
       }
     });
   }

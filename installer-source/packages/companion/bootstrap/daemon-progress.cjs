@@ -19,10 +19,10 @@ function createDaemonProgress({ packageRoot, version, homeDir = os.homedir(), pi
     // The last failure of each part, as a closed code (see diagnostics.cjs
     // classifyFailure) and the job it happened in. Kept after the part
     // recovers, so the fleet can see what last went wrong and when.
-    componentError(name, { stage, code, at }) {
+    componentError(name, { stage, code, at, waitingOn = null }) {
       const previous = state.componentErrors?.[name];
       if (previous && previous.stage === stage && previous.code === code && at - previous.at < 60_000) return;
-      state = { ...state, componentErrors: { ...(state.componentErrors || {}), [name]: { stage, code, at } } };
+      state = { ...state, componentErrors: { ...(state.componentErrors || {}), [name]: { stage, code, at, ...(waitingOn ? { waitingOn } : {}) } } };
       save();
     },
     snapshot() { return { ...state, components: { ...state.components }, componentErrors: { ...(state.componentErrors || {}) } }; },

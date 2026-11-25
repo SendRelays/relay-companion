@@ -103,6 +103,29 @@ test("downloads remain durable after failure and never erase concurrently queued
   assert.equal(readInboxJson(statePath).packets.a.attachments[0].localPath, "/local/fixture");
 });
 
+test("a prefetch that keeps failing for a day and twenty attempts is given up", async (t) => {
+  const dir = scratch(t); const file = path.join(dir, "work.json"); const statePath = path.join(dir, "state.json");
+  const scope = "account"; const a = { id: "a", attachments: [{ id: "file-a" }] };
+  fs.writeFileSync(statePath, JSON.stringify({ packets: { a } }));
+  queueInboxAttachments({ item: { relayId: "a" }, packet: a }, { scope, file });
+  const refused = async (row) => ({ ...row }); // HTTP 403: no local copy
+  let clock = 1_000;
+  for (let attempt = 1; attempt < 20; attempt += 1) {
+    clock = (readInboxJson(file).jobs.a?.nextAttemptAt ?? clock) + 1;
+    await processInboxAttachments({ scope, file, statePath, now: () => clock, materialize: refused });
+  }
+  assert.equal(readInboxJson(file).jobs.a.attempts, 19);
+  assert.equal(readInboxJson(file).jobs.a.failingSince, 1);
+  // The twentieth failure, less than a day in: kept.
+  clock = readInboxJson(file).jobs.a.nextAttemptAt + 1;
+  await processInboxAttachments({ scope, file, statePath, now: () => clock, materialize: refused });
+  assert.equal(readInboxJson(file).jobs.a.attempts, 20);
+  // A day after the first failure: given up.
+  clock = 1 + 24 * 60 * 60_000;
+  await processInboxAttachments({ scope, file, statePath, now: () => clock, materialize: refused });
+  assert.deepEqual(readInboxJson(file).jobs, {});
+});
+
 test("daemon delegates ordinary mail to its worker for every account role", async () => {
   // The legacy task-protocol poll is the developers'; Tasks themselves are
   // Relay rows and ride the ordinary poll on every row.

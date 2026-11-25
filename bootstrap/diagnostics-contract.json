@@ -26,7 +26,9 @@
     "topics",
     "tasks",
     "process-query",
-    "report"
+    "report",
+    "connection",
+    "event-loop"
   ],
   "outcomes": [
     "started",
@@ -102,7 +104,11 @@
     "server-refused",
     "component-stalled",
     "worker-out-of-memory",
-    "collection-cancelled"
+    "collection-cancelled",
+    "connection-refused",
+    "connection-reset",
+    "tls-failed",
+    "event-loop-blocked"
   ],
   "runtimeStates": [
     "active",

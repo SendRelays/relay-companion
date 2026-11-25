@@ -9,14 +9,52 @@ import mac from "../bootstrap/mac-service-recovery.cjs";
 
 const MIN = 60_000;
 
-test("sleep is the gap between uptime and the monotonic clock, and only where the OS keeps them apart", () => {
-  assert.equal(sleepClock.sleptMs({ platform: "darwin", uptimeSeconds: 1000, monotonicMs: 400_000 }), 600_000);
+test("on Linux sleep is the gap between uptime and the monotonic clock; Windows cannot tell", () => {
+  assert.equal(sleepClock.sleptMs({ platform: "linux", uptimeSeconds: 1000, monotonicMs: 400_000 }), 600_000);
   assert.equal(sleepClock.sleptMs({ platform: "linux", uptimeSeconds: 10, monotonicMs: 10_000 }), 0);
   assert.equal(sleepClock.sleptMs({ platform: "win32", uptimeSeconds: 1000, monotonicMs: 1 }), null);
   // A hung process sees both clocks advance together: no sleep.
   assert.equal(sleepClock.sleptBetween(5000, 5000 + 10), false);
   assert.equal(sleepClock.sleptBetween(5000, 5000 + 16 * MIN), true);
   assert.equal(sleepClock.sleptBetween(null, 5000), false);
+});
+
+test("on macOS the reading is the kernel's last wake, asked again only after a gap a sleep could fill", t => {
+  sleepClock.resetSleepClock(); t.after(sleepClock.resetSleepClock);
+  const start = Date.parse("2026-11-24T16:56:16Z");
+  let wake = Date.parse("2026-11-24T08:00:00Z"), reads = 0;
+  const readWake = () => { reads += 1; return `{ sec = ${Math.floor(wake / 1000)}, usec = 0 } Mon Nov 24 10:00:00 2026`; };
+  const reading = at => sleepClock.sleptMs({ platform: "darwin", now: at, readWake });
+  const before = reading(start);
+  // Awake, ticking every 5 s: the kernel is not asked again.
+  for (let i = 1; i <= 20; i += 1) assert.equal(reading(start + i * 5000), before);
+  assert.equal(reads, 1);
+  // Clamshell sleep, then a Power Nap dark wake 16 minutes later.
+  wake = start + 100_000 + 16 * MIN;
+  const after = reading(wake + 2000);
+  assert.equal(reads, 2);
+  assert.equal(after, wake);
+  assert.equal(sleepClock.sleptBetween(before, after), true);
+  assert.equal(sleepClock.sleepSource("darwin"), "waketime");
+  // A failed read is retried a minute later, not on every tick.
+  sleepClock.resetSleepClock(); reads = 0;
+  const failing = () => { reads += 1; throw new Error("ENOENT"); };
+  assert.equal(sleepClock.sleptMs({ platform: "darwin", now: start, readWake: failing }), null);
+  assert.equal(sleepClock.sleptMs({ platform: "darwin", now: start + 5000, readWake: failing }), null);
+  assert.equal(reads, 1);
+  sleepClock.sleptMs({ platform: "darwin", now: start + 61_000, readWake: failing });
+  assert.equal(reads, 2);
+});
+
+test("a Mac report sent in a dark wake, before the daemon ticked, is resuming from the kernel's wake time", () => {
+  const now = Date.parse("2026-11-24T17:34:05Z");
+  const lastTick = Date.parse("2026-11-24T17:12:30Z"), woke = Date.parse("2026-11-24T17:34:00Z");
+  const heartbeat = { at: lastTick, sleptMs: Date.parse("2026-11-24T17:12:20Z"), sleepSource: "waketime", sleeps: [] };
+  const power = sleepClock.powerState({ heartbeat, now, slept: woke, source: "waketime" });
+  assert.equal(power.state, "resuming");
+  assert.equal(power.lastWakeAt, new Date(woke).toISOString());
+  // A heartbeat from before the update, with the old kind of reading, is not compared.
+  assert.equal(sleepClock.powerState({ heartbeat: { ...heartbeat, sleepSource: "uptime" }, now, slept: woke, source: "waketime" }).state, "awake");
 });
 
 test("the heartbeat records a sleep only when the machine slept between two ticks", () => {

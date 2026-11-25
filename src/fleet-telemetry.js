@@ -132,8 +132,28 @@ export function collectCompanionFleetTelemetry({
 export function encodeCompanionFleetTelemetry(value, { onTruncated = () => {} } = {}) {
   const encode = (report) => Buffer.from(JSON.stringify(report), "utf8").toString("base64url");
   let header = encode(value);
-  // Never lose the entire report at the API's 4096-byte header boundary.
-  if (header.length > 4096) { try { onTruncated(); } catch {} header = encode({ ...value, installation: undefined }); }
+  if (header.length <= 4096) return header;
+  // Over the API's 4096-byte header boundary, shed the connection detail
+  // (connection-health.js) before the installation report, and the report
+  // before the whole header.
+  const installation = value?.installation;
+  const shed = installation ? [
+    { ...installation,
+      connection: installation.connection ? { ...installation.connection, waiting: [] } : undefined,
+      health: installation.health?.errors
+        ? { ...installation.health, errors: installation.health.errors.map(({ waitingOn, ...item }) => item) }
+        : installation.health },
+    { ...installation, connection: undefined, loop: undefined,
+      health: installation.health?.errors
+        ? { ...installation.health, errors: installation.health.errors.map(({ waitingOn, ...item }) => item) }
+        : installation.health },
+  ] : [];
+  for (const smaller of shed) {
+    header = encode({ ...value, installation: smaller });
+    if (header.length <= 4096) return header;
+  }
+  try { onTruncated(); } catch {}
+  header = encode({ ...value, installation: undefined });
   return header.length <= 4096 ? header : "";
 }
 

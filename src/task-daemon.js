@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { startRecoveryHeartbeat } from "./recovery-health.js";
+import { lastWokeAt, startRecoveryHeartbeat, wokeSince } from "./recovery-health.js";
 import { flushPendingSignOuts } from "./account.js";
 import { startRecoveryResponder } from "../bootstrap/recovery-probe.cjs";
 import { createDaemonProgress, recordDaemonCrash } from "../bootstrap/daemon-progress.cjs";
@@ -39,6 +39,7 @@ import { activeSessionOperationCount, runSessionDirectoryOnce } from "./session-
 import { productFeatures } from "./product-features.js";
 import { migratePersistedContentFields } from "./content-field-migration.js";
 import { startReleaseTidy } from "./release-tidy.js";
+import { connectionHealth, enableOutageDiagnostics } from "./connection-health.js";
 import agentRelayContext from "./agent-relay-context.cjs";
 import { storeDir } from "./host-paths.js";
 import { readCanonicalRuntime } from "./canonical-runtime.js";
@@ -1039,9 +1040,13 @@ async function runTaskDaemonImpl({ intervalMs = 4000, health } = {}) {
   // must not download or activate against an installer this process launched.
   let updaterInFlight = () => false;
   let updaterWake = () => {};
+  // Outages are recorded by the daemon only (one record per computer), and its
+  // connection summary rides the heartbeat into the health report.
+  enableOutageDiagnostics();
   startRecoveryHeartbeat({
     hasActiveWork: () => hasActiveTurns() || activeSessionOperationCount() > 0 || updaterInFlight(),
     apiOkAt: () => relayTransportHealth().lastSuccessAt,
+    connection: (at) => connectionHealth(at),
     onWake: () => updaterWake(),
   });
   try {
@@ -1147,6 +1152,13 @@ async function runTaskDaemonImpl({ intervalMs = 4000, health } = {}) {
   return runReceiverLoop({ client, me, intervalMs, log, closeLocalAgentConnection, bindLocalAgentConnection, health });
 }
 
+// After a wake the slow background parts (attachment prefetch, agent-session
+// and topic syncs) wait this long. A closed Mac's Power Nap wakes last seconds
+// (Sven's, 2026-11-24: every 15 minutes, 2-15 s each), and work started in one
+// is cut off by the next sleep: it drains the battery and reads as failures.
+// Delivery polling and local task wakes carry on. A real wake loses a minute.
+const WAKE_SETTLE_MS = 60_000;
+
 // Exercise the real orchestration in tests without registering OS services or
 // touching an account. Production supplies the same defaults used below.
 export async function runReceiverLoop({ client, me, intervalMs = 4000, log = () => {}, closeLocalAgentConnection = async () => {},
@@ -1155,12 +1167,15 @@ export async function runReceiverLoop({ client, me, intervalMs = 4000, log = () 
   followAccount = followAccountDrift, makeClient = () => new RelayClient(),
   sessionTick = sessionControllerTick, topicsPoll = pollTopicsOnce,
   deliveryTick = daemonDeliveryTick, attachments = processInboxAttachments, completionWakes = defaultProcessTaskCompletionWakes,
+  wokeAt = () => lastWokeAt(), interrupted = (since) => wokeSince(since),
 } = {}) {
   let features = getFeatures(log, me.user);
   let featureRefreshAt = Date.now() + ACCOUNT_FEATURE_REFRESH_MS;
   let topicsPolledAt = 0;
-  const components = createDaemonComponents({ health, log });
+  const components = createDaemonComponents({ health, log, wokeAt });
   for (; !stop();) {
+    let settled = true;
+    try { settled = Date.now() - (Number(wokeAt()) || 0) >= WAKE_SETTLE_MS; } catch {}
     components.inspect();
     if (client.accountDrift().status !== "same") await closeLocalAgentConnection();
     const rebound = await followAccount({ client, log, role: "receiver", health });
@@ -1177,7 +1192,7 @@ export async function runReceiverLoop({ client, me, intervalMs = 4000, log = () 
       const isCurrent = () => backgroundClient.accountDrift().status === "same" && backgroundClient.url === secureRelayApiUrl(apiUrl());
       // Named jobs: a failure or a hang is reported as attachments or task-wakes.
       const results = await Promise.allSettled([
-        track("attachments", Promise.resolve().then(() => attachments({ scope: inboxAccountScope(backgroundClient), isCurrent, log }))),
+        ...(settled ? [track("attachments", Promise.resolve().then(() => attachments({ scope: inboxAccountScope(backgroundClient), isCurrent, log, interrupted })))] : []),
         track("task-wakes", Promise.resolve().then(() => completionWakes({ log }))),
       ]);
       const failed = results.find(result => result.status === "rejected");
@@ -1185,9 +1200,9 @@ export async function runReceiverLoop({ client, me, intervalMs = 4000, log = () 
     });
     const featureSnapshot = features;
     // Do not rebind an in-flight operation's client during account switches.
-    void components.run("agent-sessions", () => sessionTick({ client: makeClient(), log, features: featureSnapshot }));
+    if (settled) void components.run("agent-sessions", () => sessionTick({ client: makeClient(), log, features: featureSnapshot }));
     if (!features.topics) components.disable("topics");
-    if (features.topics && Date.now() - topicsPolledAt >= TOPICS_POLL_MS) {
+    if (features.topics && settled && Date.now() - topicsPolledAt >= TOPICS_POLL_MS) {
       topicsPolledAt = Date.now();
       void components.run("topics", () => topicsPoll({ client: makeClient(), log }));
     } else if (!features.topics && topicsPolledAt === 0) {

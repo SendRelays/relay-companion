@@ -5,6 +5,7 @@ import { COMPANION_TELEMETRY_HEADER, companionFleetTelemetryHeader } from "./fle
 import { provisionDiagnostics } from "./diagnostics-authorization.js";
 import { applicationTelemetryHeader } from "./application-telemetry.js";
 import { readContext, recordReadTiming, readTimeout } from "./read-context.js";
+import { requestAbandoned, requestAnswered, requestFailed, requestStarted } from "./connection-health.js";
 
 const { installationKey: currentInstallationKey, machineKey: currentMachineKey } = createRequire(import.meta.url)("./installation-key.cjs");
 
@@ -317,6 +318,8 @@ export class RelayClient {
       const attemptStarted = performance.now();
       let headersMs;
       let receivedHeaders = false;
+      // Outcome and timing for this process's connection health (connection-health.js).
+      const tracked = requestStarted(method, path);
       try {
         signal?.throwIfAborted();
         const remaining = deadline - Date.now();
@@ -333,6 +336,7 @@ export class RelayClient {
         headersMs = Math.round(performance.now() - attemptStarted);
         // Any HTTP answer proves the transport; the status code is the API's business.
         noteTransportSuccess();
+        requestAnswered(tracked, res.status);
         const bodyAt = performance.now();
         const text = await res.text();
         const parseAt = performance.now();
@@ -373,6 +377,9 @@ export class RelayClient {
         recordReadTiming({ phase: "http_failure", attempt: attempts, headersMs,
           elapsedMs: Math.round(performance.now() - attemptStarted), receivedHeaders,
           outcome: signal?.aborted ? "cancelled_or_deadline" : error?.name === "TimeoutError" ? "timeout" : "error" });
+        // A caller's cancellation is not the connection's fault; no answer at all is.
+        if (!receivedHeaders && !signal?.aborted && (isRetryableTransportFailure(error) || error?.name === "TimeoutError")) requestFailed(tracked, error);
+        else requestAbandoned(tracked);
         if (signal?.aborted) throw error;
         if (!isRetryableTransportFailure(error)) throw error;
         noteTransportFailure();

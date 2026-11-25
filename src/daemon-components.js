@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { oldestRequestFor, requestScope } from "./connection-health.js";
 
 const require = createRequire(import.meta.url);
 const diagnostics = require("../bootstrap/diagnostics.cjs");
@@ -15,15 +16,23 @@ const RECORD_EVERY_MS = 15 * 60_000;
 // file carries each part's last error, and a throttled diagnostics event says
 // which part, which of its jobs, and what kind of failure. An operation may
 // name its jobs with track(stage, promise), so a stall says which one hangs.
+//
+// A run the machine slept through is not judged on the sleep: its stall clock
+// starts again at the wake (wokeAt, recovery-health.js), and a failure it met
+// is logged but not recorded as a diagnostic, since the sleep cut it off.
 export function createDaemonComponents({
-  health, log = () => {}, now = Date.now, stalledMs = 60_000,
+  health, log = () => {}, now = Date.now, stalledMs = 60_000, wokeAt = () => 0,
   record = (event) => diagnostics.record(event), classify = diagnostics.classifyFailure,
 } = {}) {
+  const woke = () => { try { return Number(wokeAt()) || 0; } catch { return 0; } };
+  const runningFor = (entry) => now() - Math.max(entry.startedAt, woke());
   const active = new Map();
   const recordedAt = new Map();
-  function note(name, stage, code, elapsedMs) {
+  function note(name, stage, code, elapsedMs, waitingOn = null) {
     const at = now();
-    try { health?.componentError?.(name, { stage, code, at }); } catch {}
+    // waitingOn: the kind of server request the part was still waiting on
+    // ("GET /v1/inbox"), so a stall says "waiting on the server" or not.
+    try { health?.componentError?.(name, { stage, code, at, ...(waitingOn ? { waitingOn } : {}) }); } catch {}
     const key = `${name}:${stage}:${code}`;
     if (at - (recordedAt.get(key) ?? -Infinity) < RECORD_EVERY_MS) return;
     recordedAt.set(key, at);
@@ -34,17 +43,17 @@ export function createDaemonComponents({
     if (pending.stallNoted) return;
     pending.stallNoted = true;
     const stage = [...pending.jobs][0] || name;
-    note(name, stage, "component-stalled", now() - pending.startedAt);
+    note(name, stage, "component-stalled", runningFor(pending), oldestRequestFor(name)?.label || null);
   }
   return {
     inspect() {
-      for (const [name, pending] of active) if (now() - pending.startedAt >= stalledMs) stalled(name, pending);
+      for (const [name, pending] of active) if (runningFor(pending) >= stalledMs) stalled(name, pending);
     },
     disable(name) { if (!active.has(name)) health?.component(name, "disabled"); },
     run(name, operation) {
       const pending = active.get(name);
       if (pending) {
-        if (now() - pending.startedAt >= stalledMs) stalled(name, pending);
+        if (runningFor(pending) >= stalledMs) stalled(name, pending);
         return pending.promise;
       }
       const entry = { startedAt: now(), jobs: new Set(), stallNoted: false };
@@ -60,12 +69,13 @@ export function createDaemonComponents({
         );
       };
       active.set(name, entry);
-      entry.promise = Promise.resolve().then(() => operation(track)).then(
+      // Requests made inside the part are tagged with its name (connection-health.js).
+      entry.promise = Promise.resolve().then(() => requestScope.run({ component: name }, () => operation(track))).then(
         () => health?.component(name, "ok"),
         error => {
           health?.component(name, "failed");
           log(`${name} failed: ${error?.message || error}`);
-          note(name, error?.diagnosticStage || name, classify(error), now() - entry.startedAt);
+          if (woke() <= entry.startedAt) note(name, error?.diagnosticStage || name, classify(error), now() - entry.startedAt);
         },
       ).finally(() => active.delete(name));
       return entry.promise;

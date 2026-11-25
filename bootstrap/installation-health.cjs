@@ -157,7 +157,8 @@ function collectInstallationHealth({ homeDir = os.homedir(), platform = process.
     .filter(([name, item]) => LABEL.test(name) && LABEL.test(item?.stage || "") && LABEL.test(item?.code || "")
       && Number.isFinite(item.at) && item.at <= now && now - item.at < 24 * 60 * 60_000)
     .sort((a, b) => b[1].at - a[1].at).slice(0, 4)
-    .map(([name, item]) => ({ component: name, stage: item.stage, code: item.code, at: new Date(item.at).toISOString() })) : [];
+    .map(([name, item]) => ({ component: name, stage: item.stage, code: item.code, at: new Date(item.at).toISOString(),
+      ...(typeof item.waitingOn === "string" && /^[A-Z]{1,7} \/[a-z0-9:/-]{0,60}$/.test(item.waitingOn) ? { waitingOn: item.waitingOn } : {}) })) : [];
   let serviceHealth = { state: "healthy", reason: "ready", components: unhealthyComponents, ...(errors.length ? { errors } : {}) };
   if (!activeVersion) serviceHealth = { ...serviceHealth, state: "unverified", reason: "runtime-not-active" };
   else if (!live?.daemon) serviceHealth = { ...serviceHealth, state: "failed", reason: "daemon-missing" };
@@ -171,7 +172,7 @@ function collectInstallationHealth({ homeDir = os.homedir(), platform = process.
   else if (progressMatches && ["offline", "signed-out"].includes(progress.phase)) serviceHealth = { ...serviceHealth, state: "waiting", reason: progress.phase };
   else if (monitorFailure || supervisor?.ok === false) serviceHealth = { ...serviceHealth, state: "degraded", reason: "recovery-failed" };
   else if (!progressSupported) serviceHealth = { ...serviceHealth, state: "unverified", reason: "legacy-readiness" };
-  const power = require("./sleep-clock.cjs").powerState({ heartbeat, now, slept });
+  const power = require("./sleep-clock.cjs").powerState({ heartbeat, now, slept, source: require("./sleep-clock.cjs").sleepSource(platform) });
   if (["resuming", "brief-wakes"].includes(power.state) && SLEEP_EXPLAINED.has(serviceHealth.reason)) {
     serviceHealth = { ...serviceHealth, state: "waiting", reason: "resuming-from-sleep" };
   }
@@ -179,9 +180,11 @@ function collectInstallationHealth({ homeDir = os.homedir(), platform = process.
     const report = read(path.join(root, "transport-health", `${name}.json`));
     return report?.at > 0 && now >= report.at ? new Date(report.at).toISOString() : null;
   };
+  const { connection, loop } = heartbeatDiagnosis(heartbeat);
   return {
     installationId: installationId({ homeDir }), os: platform, osVersion: osVersion.slice(0, 80), arch,
     ...inventory, daemonResponsive, health: serviceHealth, pill, power,
+    ...(connection ? { connection } : {}), ...(loop ? { loop } : {}),
     recovery: supervisor || monitorFailure ? { status: supervisor?.status || monitor.state, version: supervisor?.launcherVersion || null,
       checkedAt: supervisor?.checkedAt > 0 ? new Date(supervisor.checkedAt).toISOString() : null,
       desiredVersion: supervisor?.desiredVersion || null,
@@ -193,6 +196,35 @@ function collectInstallationHealth({ homeDir = os.homedir(), platform = process.
     transports: { mcpLastUsedAt: transport("mcp"), httpsLastUsedAt: transport("https") },
   };
 }
+// The daemon's connection summary and event-loop lag, as its last heartbeat
+// recorded them (src/recovery-health.js, src/connection-health.js). asOf is
+// the heartbeat's own time: a stale one is the daemon not ticking, and is
+// shown as such rather than as current numbers. Only bounded values pass.
+function heartbeatDiagnosis(heartbeat) {
+  const iso = value => (typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null);
+  const count = value => (Number.isSafeInteger(value) && value >= 0 ? Math.min(value, 1_000_000) : null);
+  const label = value => (typeof value === "string" && /^[A-Z]{1,7} \/[a-z0-9:/-]{0,60}$/.test(value) ? value : null);
+  const code = value => (typeof value === "string" && /^[a-z0-9-]{1,40}$/.test(value) ? value : null);
+  const asOf = Number.isFinite(heartbeat?.at) && heartbeat.at > 0 ? new Date(heartbeat.at).toISOString() : null;
+  const raw = heartbeat?.connection;
+  const connection = raw && typeof raw === "object" ? {
+    asOf,
+    lastSuccessAt: iso(raw.lastSuccessAt), failingSince: iso(raw.failingSince), lastFailureAt: iso(raw.lastFailureAt),
+    lastFailureCode: code(raw.lastFailureCode),
+    window: raw.window && typeof raw.window === "object" ? {
+      minutes: count(raw.window.minutes) ?? 15, ok: count(raw.window.ok) ?? 0, serverError: count(raw.window.serverError) ?? 0,
+      failed: count(raw.window.failed) ?? 0, slow: count(raw.window.slow) ?? 0, p50Ms: count(raw.window.p50Ms), p95Ms: count(raw.window.p95Ms),
+    } : null,
+    waiting: (Array.isArray(raw.waiting) ? raw.waiting : []).slice(0, 3).flatMap(item => {
+      const name = label(item?.label);
+      return name ? [{ label: name, component: code(item?.component), waitingMs: count(item?.waitingMs) ?? 0 }] : [];
+    }),
+  } : null;
+  const loopRaw = heartbeat?.loop;
+  const loop = loopRaw && typeof loopRaw === "object" ? { asOf, maxGapMs: count(loopRaw.maxGapMs), gapsOver10s: count(loopRaw.gapsOver10s) ?? 0, lastGapAt: iso(loopRaw.lastGapAt) } : null;
+  return { connection, loop };
+}
+
 function recordTransport(name, { homeDir = os.homedir(), now = Date.now() } = {}) {
   if (!["mcp", "https"].includes(name)) return;
   const root = path.join(homeDir, ".relay", "transport-health");

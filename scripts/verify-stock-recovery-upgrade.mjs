@@ -86,6 +86,29 @@ const processRows = () => {
     return runtimeProcessCommands(process.platform).join("\n") || "(no Relay processes)";
   } catch (error) { return `(process listing unavailable: ${error.message})`; }
 };
+// How long the machine itself takes for what Relay's startup and readiness
+// checks do on it. On Windows ARM runners the stock baseline's readiness check
+// times out with every sample near 35 s (one full process listing plus a 10 s
+// daemon probe), while the same machine installs natively in about a minute;
+// these numbers say which part is slow. Bounded and diagnostic only.
+const timed = (command, args) => {
+  const begin = Date.now();
+  const result = spawnSync(command, args, { encoding: "utf8", windowsHide: true, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
+  const ms = Date.now() - begin;
+  const outcome = result.error ? (result.error.code || result.error.message) : `exit ${result.status}`;
+  return { ms, outcome, output: String(result.stdout || result.stderr || "").trim().split(/\r?\n/).slice(0, 6).join(" | ").slice(0, 400) };
+};
+const machineTimings = label => {
+  const report = { node: timed(process.execPath, ["-e", "0"]) };
+  if (process.platform === "win32") {
+    report.processListing = timed("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "(Get-CimInstance Win32_Process | Measure-Object).Count"]);
+    report.schtasksQuery = timed("schtasks.exe", ["/Query", "/FO", "CSV", "/NH"]);
+    report.defender = timed("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+      "Get-MpComputerStatus | Select-Object AMRunningMode,RealTimeProtectionEnabled,OnAccessProtectionEnabled,IsTamperProtected | ConvertTo-Json -Compress"]);
+    delete report.schtasksQuery.output;
+  }
+  log(`--- ${label}: machine timings (${process.platform}-${process.arch}, ${os.cpus().length} CPUs)`, JSON.stringify(report));
+};
 const snapshot = label => {
   log(`--- ${label}: runtime pointer`, JSON.stringify(readOptional(pointer)));
   log(`--- ${label}: recovery status`, JSON.stringify(readOptional(path.join(recoveryDir, "status.json"))));
@@ -95,6 +118,11 @@ const snapshot = label => {
   log(`--- ${label}: Relay processes\n${processRows()}`);
   log(`--- ${label}: recovery.log tail\n${tail(path.join(recoveryDir, "recovery.log"))}`);
   log(`--- ${label}: update.log tail\n${tail(path.join(root, "update.log"), 40)}`);
+  // The readiness probe that times out is answered by the daemon; its own logs
+  // say whether it started late, blocked, or never listened.
+  log(`--- ${label}: daemon.log tail\n${tail(path.join(root, "daemon.log"), 120)}`);
+  log(`--- ${label}: pill.log tail\n${tail(path.join(root, "pill.log"), 40)}`);
+  machineTimings(label);
 };
 // Claude Code keeps Relay's MCP launcher open for as long as a session lasts, so
 // on a real machine the old release's broker is alive while the update runs.
@@ -153,6 +181,7 @@ try {
   // Both packages are stock public releases. Test controls only discovery and
   // local journal fixtures; it never edits installed application code or tags.
   const initial = livedInFrom || from;
+  machineTimings("before install");
   log(`installing stock relay-companion@${initial}`);
   run(process.platform === "win32" ? "npx.cmd" : "npx", ["--yes", "--no-audit", "--no-fund", `relay-companion@${initial}`, "setup"]);
   baseline = read(pointer);

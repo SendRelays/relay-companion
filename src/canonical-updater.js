@@ -93,8 +93,13 @@ export function runDelegatedActivation(mode, target, {
       resolve({ ...result, delegated: true, delegatedTo: owner.version });
     };
     try {
+      // The new release's code acts inside this worker's transaction. Hand it
+      // the lock's owner token, as every repair child gets: without it the
+      // registration step it runs sees another owner and refuses ("Another
+      // verified Relay install or update is already in progress").
+      const owned = require("../bootstrap/lifecycle-ownership.cjs").ownerEnvironment({ homeDir, env });
       child = spawnImpl(owner.node, [entry, payload], {
-        env: { ...env, [ACTIVE_UPDATE_WORKER_ENV]: "1", RELAY_ACTIVATION_WORKER: "1", ELECTRON_RUN_AS_NODE: undefined },
+        env: { ...owned, [ACTIVE_UPDATE_WORKER_ENV]: "1", RELAY_ACTIVATION_WORKER: "1", ELECTRON_RUN_AS_NODE: undefined },
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });

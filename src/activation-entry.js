@@ -10,6 +10,7 @@
 // the transaction lock, verified this tree before running it, and restores
 // itself with its own code if this one crashes, hangs or fails
 // (canonical-updater.js, runDelegatedActivation).
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,6 +63,26 @@ export function parseActivationRequest(payload, {
   return { mode: request.mode, target: request.target, homeDir: request.homeDir, platform: request.platform, options };
 }
 
+/**
+ * The environment that lets this process, and the repairs it runs, act inside
+ * the update worker's transaction lock. The worker that started this process
+ * holds the lock; a worker from before 2026-11-27 did not hand over its owner
+ * token, and without it `relay repair-runtime` sees another owner and refuses
+ * ("Another verified Relay install or update is already in progress", the
+ * six-platform gate for 0.1.649). So this release claims the token itself,
+ * only when the lock's recorded owner is its own parent.
+ */
+export function workerTransactionEnv({ homeDir = os.homedir(), env = process.env, parentPid = process.ppid, readFileSync = fs.readFileSync } = {}) {
+  if (env.RELAY_LIFECYCLE_OWNER) return env;
+  try {
+    const owner = JSON.parse(readFileSync(path.join(homeDir, ".relay", "runtime", "transaction.lock", "owner.json"), "utf8"));
+    if (Number.isSafeInteger(owner?.pid) && owner.pid === parentPid && typeof owner.nonce === "string" && owner.nonce) {
+      return { ...env, RELAY_LIFECYCLE_OWNER: `${owner.pid}:${owner.nonce}` };
+    }
+  } catch {}
+  return env;
+}
+
 export async function runActivationRequest(request, { activate = activateCanonicalRuntime } = {}) {
   return activate(request.target, { homeDir: request.homeDir, platform: request.platform, ...request.options });
 }
@@ -77,7 +98,10 @@ if (process.env[ACTIVATION_WORKER_ENV] === "1" && process.argv[2]) {
   (async () => {
     let result;
     try {
-      result = await runActivationRequest(parseActivationRequest(process.argv[2]));
+      const request = parseActivationRequest(process.argv[2]);
+      const owned = workerTransactionEnv({ homeDir: request.homeDir });
+      if (owned.RELAY_LIFECYCLE_OWNER && !process.env.RELAY_LIFECYCLE_OWNER) process.env.RELAY_LIFECYCLE_OWNER = owned.RELAY_LIFECYCLE_OWNER;
+      result = await runActivationRequest(request);
     } catch (error) {
       result = { ok: false, reason: "delegated-activation-threw", detail: String(error?.message || error).slice(0, 2000) };
     }

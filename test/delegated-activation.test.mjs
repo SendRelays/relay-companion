@@ -148,3 +148,48 @@ posixTest("the update worker delegates the switch, lets a new release that gave 
   await options.postCommitActivate(candidate);
   assert.deepEqual(calls, [["own", "0.1.700"]]);
 });
+
+// 2026-11-27, the six-platform release gate for 0.1.649: the delegated
+// activation ran `relay repair-runtime`, whose lifecycle check saw the old
+// worker holding the lock and refused ("Another verified Relay install or
+// update is already in progress"). The fake activation above never ran that
+// check, so these tests passed. This one runs the real one, in a grandchild.
+posixTest("the new release's activation and the repairs it runs act inside the worker's lock", async (t) => {
+  const { root, owner } = release(t, "");
+  const lockDir = path.join(root, ".relay", "runtime", "transaction.lock");
+  fs.mkdirSync(lockDir, { recursive: true });
+  // This test process holds the canonical lock, as the update worker does.
+  fs.writeFileSync(path.join(lockDir, "owner.json"), JSON.stringify({ pid: process.pid, nonce: "a".repeat(32), createdAt: Date.now() }));
+  const ownership = path.resolve("bootstrap", "lifecycle-ownership.cjs");
+  const grandchild = path.join(root, "repair-runtime.cjs");
+  fs.writeFileSync(grandchild, `
+    const lease = require(${JSON.stringify(ownership)}).lifecycleOwnership({ homeDir: ${JSON.stringify(root)} });
+    process.stdout.write(JSON.stringify({ delegated: lease.delegated }));
+    lease.release();
+  `);
+  fs.writeFileSync(path.join(owner.packageRoot, "src", "activation-entry.js"), `
+    const { spawnSync } = require("node:child_process");
+    const { ownerEnvironment } = require(${JSON.stringify(ownership)});
+    // What activateDrainedRuntime does: run repair-runtime with the owner environment.
+    const repair = spawnSync(process.execPath, [${JSON.stringify(grandchild)}], { encoding: "utf8", env: ownerEnvironment({ homeDir: ${JSON.stringify(root)} }) });
+    console.log("${ACTIVATION_RESULT_PREFIX}" + JSON.stringify({ ok: repair.status === 0, repair: repair.stdout, error: repair.stderr.trim().split("\\n").pop() }));
+  `);
+  const result = await runDelegatedActivation("activate", owner, { owner, homeDir: root, platform: "linux", env: { PATH: process.env.PATH } });
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(JSON.parse(result.repair), { delegated: true }, "the repair joined the worker's transaction instead of seeing another owner");
+});
+
+test("started by a worker that did not hand over its token, the new release claims it only from its own parent", async (t) => {
+  const { workerTransactionEnv } = await import("../src/activation-entry.js");
+  const { root } = release(t, "");
+  const lockDir = path.join(root, ".relay", "runtime", "transaction.lock");
+  fs.mkdirSync(lockDir, { recursive: true });
+  fs.writeFileSync(path.join(lockDir, "owner.json"), JSON.stringify({ pid: 4242, nonce: "b".repeat(32) }));
+  assert.equal(workerTransactionEnv({ homeDir: root, env: {}, parentPid: 4242 }).RELAY_LIFECYCLE_OWNER, `4242:${"b".repeat(32)}`,
+    "a 0.1.649 worker started it: the token is claimed");
+  assert.equal(workerTransactionEnv({ homeDir: root, env: {}, parentPid: 999 }).RELAY_LIFECYCLE_OWNER, undefined,
+    "started by anything other than the lock's owner: nothing is claimed");
+  assert.equal(workerTransactionEnv({ homeDir: root, env: { RELAY_LIFECYCLE_OWNER: "1:x" }, parentPid: 4242 }).RELAY_LIFECYCLE_OWNER, "1:x",
+    "a token the worker handed over is kept as it is");
+  assert.equal(workerTransactionEnv({ homeDir: path.join(root, "nowhere"), env: {}, parentPid: 4242 }).RELAY_LIFECYCLE_OWNER, undefined);
+});

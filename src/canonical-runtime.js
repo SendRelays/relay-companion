@@ -450,6 +450,39 @@ function findReusableRelease({ version, layout, platform, io, exclude, verifyCan
 }
 
 /**
+ * A rollback whose proof failed can still have left the restored release
+ * serving. 2026-11-26: a Mac updating 0.1.634 -> 0.1.648 restored 0.1.634,
+ * whose daemon kept running and reporting every minute, but the proof (which
+ * also demands no stray broker and a running pill) failed, so the pointer said
+ * nothing was active and recovery restarted Relay on every attempt. When
+ * `confirmServing` proves the restored daemon is the one running and
+ * answering, keep it as the active runtime and note what the rollback could
+ * not prove; the daemon's own guards heal a stray broker or a missing pill.
+ * Never throws; null when not proven.
+ */
+async function servingDespiteFailedRollback(target, rollback, confirmServing, context) {
+  if (!target || rollback?.ok || rollback?.refused) return null;
+  try {
+    const served = await confirmServing(target, context);
+    return served?.ok === true ? served : null;
+  } catch {
+    return null;
+  }
+}
+
+function rollbackIncompleteRecord(rollback, failed, served, at) {
+  return {
+    phase: "rollback",
+    reason: rollback?.reason || "rollback-failed",
+    detail: String(rollback?.detail || "").slice(0, 500),
+    failedVersion: failed?.version || null,
+    pill: served?.pill === true,
+    strayBroker: served?.oldBroker === true,
+    at,
+  };
+}
+
+/**
  * Reconcile a worker crash that left `current.json` non-authoritatively activating.
  * The journal remains in place while external registrations/services are restored;
  * only a successful rollback makes the previous canonical pointer authoritative.
@@ -465,6 +498,7 @@ export async function recoverCanonicalRuntime({
   verifyCandidate = verifyCanonicalCandidate,
   onLockAcquired = () => {},
   lockIdentity = {},
+  confirmServing = async () => ({ ok: false }),
 } = {}) {
   const state = readCanonicalRuntimeState({ homeDir, platform, readFileSync: fsImpl.readFileSync.bind(fsImpl) });
   if (!state || !["activating", "recovery-required"].includes(state.state)) return { ok: true, phase: "noop", recovered: false };
@@ -516,6 +550,22 @@ export async function recoverCanonicalRuntime({
   let rollback = null;
   try {
     rollback = await rollbackActivate(target, { recovery: state, refusedPrevious: selection.refused || null });
+    const served = await servingDespiteFailedRollback(target, rollback, confirmServing, { recovery: state });
+    if (served) {
+      const incomplete = rollbackIncompleteRecord(rollback, state.candidate, served, now());
+      atomicWritePointer(layout.pointerPath, target?.active === true ? { ...target, rollbackIncomplete: incomplete } : {
+        schema: CANONICAL_RUNTIME_SCHEMA,
+        active: false,
+        state: "inactive",
+        rolledBackFrom: state.candidate?.releaseId || null,
+        recoveredAt: now(),
+        rollbackIncomplete: incomplete,
+      }, { ...io, platform });
+      // The failed candidate's tree stays: a process of it (a stray broker) may
+      // still be running. The release tidy removes it once nothing uses it.
+      return { ok: true, phase: "recovered", recovered: true, target, rollbackIncomplete: incomplete,
+        refusedPrevious: selection.refused || null, substituted: selection.substituted === true };
+    }
     if (!rollback?.ok) {
       atomicWritePointer(layout.pointerPath, {
         ...state,
@@ -1126,6 +1176,9 @@ export async function repairCanonicalRuntime({
   preCommitVerify = async () => ({ ok: true }),
   postCommitActivate = async () => ({ ok: true }),
   rollbackActivate = async () => ({ ok: true }),
+  // See servingDespiteFailedRollback. The default proves nothing, so callers
+  // that do not supply a check keep the strict behaviour.
+  confirmServing = async () => ({ ok: false }),
   rollbackTarget = null,
   archiveRecoveryJournal = false,
   now = Date.now,
@@ -1200,6 +1253,7 @@ export async function repairCanonicalRuntime({
   let activationJournalWritten = false;
   let activationStarted = false;
   let rollbackSucceeded = false;
+  let rollbackIncomplete = null;
   let candidate = null;
   // Everything the pruner would keep is excluded from adoption: the current
   // pointer's release, and any release a live process is running from.
@@ -1313,7 +1367,13 @@ export async function repairCanonicalRuntime({
         rolledBackFrom: candidate.releaseId,
         committedAt: now(),
       };
-      if (rollback?.ok) {
+      const served = await servingDespiteFailedRollback(target, rollback, confirmServing, { failed: candidate, activation: activated });
+      const incomplete = served ? rollbackIncompleteRecord(rollback, candidate, served, now()) : null;
+      if (incomplete) {
+        // Rolled back in practice. The candidate tree stays (see
+        // servingDespiteFailedRollback); the release tidy removes it later.
+        atomicWritePointer(layout.pointerPath, { ...rollbackPointer, rollbackIncomplete: incomplete }, { ...io, platform });
+      } else if (rollback?.ok) {
         atomicWritePointer(layout.pointerPath, rollbackPointer, { ...io, platform });
         // The rollback has already run (it executes through the failed candidate's
         // bin, so the tree was needed until this point) and the pointer no longer
@@ -1351,8 +1411,9 @@ export async function repairCanonicalRuntime({
         candidate,
         previous,
         rollbackTarget: target,
-        rolledBack: rollback?.ok === true,
+        rolledBack: rollback?.ok === true || Boolean(incomplete),
         rollbackOk: rollback?.ok === true,
+        ...(incomplete ? { rollbackIncomplete: incomplete } : {}),
       };
     }
     candidate = { ...candidate, state: "active", active: true, committedAt: now() };
@@ -1395,8 +1456,18 @@ export async function repairCanonicalRuntime({
       } catch (rollbackError) {
         rollback = { ok: false, reason: "rollback-threw", detail: rollbackError?.message || String(rollbackError) };
       }
+      const served = await servingDespiteFailedRollback(selection.target, rollback, confirmServing, { failed: candidate, error });
+      rollbackIncomplete = served ? rollbackIncompleteRecord(rollback, candidate, served, now()) : null;
       try {
-        if (rollback?.ok) {
+        if (rollbackIncomplete) {
+          atomicWritePointer(layout.pointerPath, { ...((previous && selection.substituted ? selection.target : previous) || {
+            schema: CANONICAL_RUNTIME_SCHEMA,
+            active: false,
+            rolledBackFrom: candidate.releaseId,
+            committedAt: now(),
+          }), rollbackIncomplete }, { ...io, platform });
+          rollbackSucceeded = true;
+        } else if (rollback?.ok) {
           atomicWritePointer(layout.pointerPath, (previous && selection.substituted ? selection.target : previous) || {
             schema: CANONICAL_RUNTIME_SCHEMA,
             active: false,
@@ -1426,6 +1497,7 @@ export async function repairCanonicalRuntime({
       previous,
       rollbackTarget: previous || rollbackTarget || null,
       rolledBack: rollbackSucceeded,
+      ...(rollbackIncomplete ? { rollbackIncomplete } : {}),
     };
   } finally {
     try { lock.release(); } catch {}

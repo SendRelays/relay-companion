@@ -1,7 +1,7 @@
 import { accountIdentity, apiUrl, deviceToken } from "./config.js";
 import { compareAccountIdentity } from "./account.js";
 import { createRequire } from "node:module";
-import { COMPANION_TELEMETRY_HEADER, companionFleetTelemetryHeader } from "./fleet-telemetry.js";
+import { COMPANION_TELEMETRY_HEADER, companionFleetTelemetryHeader, companionFleetTelemetryReport } from "./fleet-telemetry.js";
 import { provisionDiagnostics } from "./diagnostics-authorization.js";
 import { applicationTelemetryHeader } from "./application-telemetry.js";
 import { readContext, recordReadTiming, readTimeout } from "./read-context.js";
@@ -301,9 +301,7 @@ export class RelayClient {
     if (context) headers["x-relay-request-id"] = context.requestId;
     if (auth && this.token) headers.Authorization = `Bearer ${this.token}`;
     if (auth && String(this.token || "").startsWith("dev_")) {
-      const telemetry = companionFleetTelemetryHeader({
-        scope: JSON.stringify([this.url, this.identity?.userId, this.identity?.deviceId]),
-      });
+      const telemetry = companionFleetTelemetryHeader({ scope: this.#telemetryScope() });
       if (telemetry) headers[COMPANION_TELEMETRY_HEADER] = telemetry;
       const application = applicationTelemetryHeader();
       if (application) headers["x-relay-application-telemetry"] = application;
@@ -390,7 +388,13 @@ export class RelayClient {
           `[relay] API transport ${retrying ? "interrupted" : "failed"}: ${cause}; `
           + (retrying ? `retrying ${method} once with a fresh connection` : `${method} was not retried`),
         );
-        if (!retrying) throw error;
+        if (!retrying) {
+          // The one retry was owed and only the read's deadline stopped it: the
+          // read ran out of time. A starved event loop can read the broken
+          // socket after the deadline but before the budget's timer fires.
+          if (context && retryable && attempts === 1 && !receivedHeaders) throw Object.assign(readTimeout(), { cause: error });
+          throw error;
+        }
       }
     }
     throw new Error("Relay transport retry exhausted");
@@ -445,6 +449,24 @@ export class RelayClient {
   /** A content-free engagement event from one of the app's teaching surfaces. */
   onboardingEvent(event, surface, context) {
     return this.#req("POST", "/v1/onboarding/events", { event, surface, ...(context ? { context } : {}) }, { timeoutMs: 8000 });
+  }
+
+  #telemetryScope() {
+    return JSON.stringify([this.url, this.identity?.userId, this.identity?.deviceId]);
+  }
+
+  /**
+   * This computer's whole fleet report, in a body so nothing is shed to fit the
+   * 4096-byte header every device request carries. Null while no fresh sample
+   * exists; the sample is taken in the background and never on this call.
+   */
+  fleetReport({ freshMs } = {}) {
+    if (!String(this.token || "").startsWith("dev_")) return null;
+    return companionFleetTelemetryReport({ scope: this.#telemetryScope(), freshMs });
+  }
+
+  uploadFleetReport(report) {
+    return this.#req("POST", "/v1/devices/telemetry", JSON.parse(report), { timeoutMs: 10_000, retry: false });
   }
 
   /** Content-free totals of which view the app was in and how it switched (overlay/view-telemetry.cjs). */

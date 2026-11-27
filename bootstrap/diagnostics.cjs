@@ -25,7 +25,15 @@ function errorCode(error) {
     [/recovery-bundle-publish-failed/, "recovery-publish-failed"], [/recovery-node-preservation-failed/, "recovery-node-failed"],
     [/runtime-not-healthy|not-responsive/, "health-check-failed"], [/configuration-unavailable/, "configuration-unavailable"],
   ];
-  return patterns.find(([pattern]) => pattern.test(text))?.[1] || "unclassified";
+  const matched = patterns.find(([pattern]) => pattern.test(text))?.[1];
+  if (matched) return matched;
+  // A reason that is itself a code (activation-busy, registration-restore-failed,
+  // runtime-registration-failed) says exactly what failed, so it is kept rather
+  // than flattened: 2026-11-26 a Mac's every failure read "unclassified" and its
+  // cause had to be inferred from timings. Free text never qualifies; the API
+  // stores an unknown code as a bounded label (packages/shared/src/tolerant.ts).
+  const code = /^([a-z][a-z0-9]*(?:-[a-z0-9]+){1,7})(?::|$)/.exec(text)?.[1];
+  return code && code.length <= 60 ? code : "unclassified";
 }
 // What kind of failure a background part hit, in the same closed vocabulary:
 // never the message itself, which can hold paths or content. A server's error
@@ -76,7 +84,8 @@ function record(input, { homeDir = os.homedir(), now = Date.now, scope } = {}) {
       component: pick(contract.components, input.component), stage: pick(contract.stages, input.stage),
       outcome: pick(contract.outcomes, input.outcome), code: errorCode(input.code),
       signingKeyId: String(input.code?.message || input.code || "").match(/unknown key (relay-runtime-release-v\d{1,6})\b/)?.[1] || null,
-      feed: input.stage === "discovery" ? input.channel === "stable" ? input.component === "recovery" ? "stable" : "stable-v3" : pick(["dev", "staging"], input.channel) : "unknown",
+      // Both the updater and (since 2026-11) the independent repair read stable-v3.
+      feed: input.stage === "discovery" ? input.channel === "stable" ? "stable-v3" : pick(["dev", "staging"], input.channel) : "unknown",
       version: version(input.version), targetVersion: version(input.targetVersion),
       channel: pick(contract.channels, input.channel),
       elapsedMs: Number.isFinite(input.elapsedMs) ? Math.min(86400000, Math.max(0, Math.round(input.elapsedMs))) : null,

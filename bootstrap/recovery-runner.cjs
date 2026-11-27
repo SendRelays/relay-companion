@@ -33,7 +33,33 @@ function compare(a, b) {
   for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i] ? 1 : -1;
   return 0;
 }
-async function discover(channel, { fetchImpl = fetch, trustStore = trust } = {}) {
+// Where a stable computer learns the current release: the same signed records
+// its updater follows (src/auto-update.js, src/runtime-cohort.js). Until
+// 2026-11 this read companion-releases/stable/, the old-key bridge record that
+// stays at 0.1.550 for installs that only know the old signing key (0.1.549
+// and older), so a repair of a broken computer could install 0.1.550.
+const RELEASE_ORIGIN = "https://api.sendrelays.com/v1/companion-releases";
+const STABLE_RECORD = "stable-v3";
+const COHORT_RECORD = "stable-v3-cohort";
+const COHORT_MAX_EXPIRY_MS = 31 * 86400_000;
+// The named-device cohort, checked the way src/runtime-cohort.js checks it:
+// a listed, unexpired device takes a newer version; anything else, including
+// any error, leaves it on the general stable version.
+async function cohortVersion(general, { fetchImpl, trustStore, deviceId, now }) {
+  if (typeof deviceId !== "string" || !deviceId) return null;
+  try {
+    const response = await fetchImpl(`${RELEASE_ORIGIN}/${COHORT_RECORD}/manifest.json?recovery=${now()}`, { cache: "no-store", signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) return null;
+    const payload = JSON.parse(verifyReleaseEnvelope(await response.json(), trustStore).toString("utf8"));
+    const keys = Object.keys(payload || {}).sort().join(",");
+    if (keys !== "deviceIds,expiresAt,kind,product,schema,sourceSha,version" || payload.schema !== 1 || payload.product !== "Relay"
+      || payload.kind !== "runtime-cohort" || !Array.isArray(payload.deviceIds) || !Number.isSafeInteger(payload.expiresAt)) return null;
+    if (payload.expiresAt <= now() || payload.expiresAt > now() + COHORT_MAX_EXPIRY_MS) return null;
+    if (!payload.deviceIds.includes(deviceId) || compare(payload.version, general) !== 1) return null;
+    return payload.version;
+  } catch { return null; }
+}
+async function discover(channel, { fetchImpl = fetch, trustStore = trust, homeDir = os.homedir(), now = Date.now } = {}) {
   let version;
   if (channel !== "stable") {
     const response = await fetchImpl("https://registry.npmjs.org/-/package/relay-companion/dist-tags", { cache: "no-store", signal: AbortSignal.timeout(15_000) });
@@ -41,13 +67,26 @@ async function discover(channel, { fetchImpl = fetch, trustStore = trust } = {})
     version = (await response.json())[channel];
     if (compare(version, "0.0.0") !== 1) throw new Error("channel-version-invalid");
   }
-  const route = version ? `v${version}` : "stable";
-  const response = await fetchImpl(`https://api.sendrelays.com/v1/companion-releases/${route}/manifest.json?recovery=${Date.now()}`, { cache: "no-store", signal: AbortSignal.timeout(15_000) });
+  const route = version ? `v${version}` : STABLE_RECORD;
+  const response = await fetchImpl(`${RELEASE_ORIGIN}/${route}/manifest.json?recovery=${now()}`, { cache: "no-store", signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new Error(`manifest-http-${response.status}`);
   const envelope = await response.json();
   const payload = JSON.parse(verifyReleaseEnvelope(envelope, trustStore).toString("utf8"));
   if (payload.product !== "Relay" || compare(payload.version, "0.0.0") !== 1 || (version && version !== payload.version)) throw new Error("release-identity-invalid");
-  return payload.version;
+  if (version) return payload.version;
+  const deviceId = read(path.join(homeDir, ".relay", "config.json"))?.deviceId;
+  return (await cohortVersion(payload.version, { fetchImpl, trustStore, deviceId, now })) || payload.version;
+}
+// The newest version this computer has run and proven healthy. A repair
+// never installs anything older: whatever a release record says, going back
+// past a release this computer ran is a downgrade, not a repair.
+function provenFloor(root, channel) {
+  let floor = null;
+  for (const name of ["runtime-good.json", "runtime-previous-good.json"]) {
+    const value = read(path.join(root, "recovery", name));
+    if (value?.channel === channel && compare(value.version, "0.0.0") === 1 && (!floor || compare(value.version, floor) === 1)) floor = value.version;
+  }
+  return floor;
 }
 function busyLease(heartbeat, now = Date.now()) {
   return Boolean(heartbeat && heartbeat.busy === true && Number.isFinite(heartbeat.at) && now >= heartbeat.at && now - heartbeat.at < HEARTBEAT_MS);
@@ -232,6 +271,21 @@ async function recoverLocked({ homeDir = os.homedir(), env = process.env, now = 
   }, { homeDir, now, scope: diagnosticScope });
   let advertisedVersion = null, discoveryFailure = null;
   const log = recoveryLogger(root, runId, now);
+  // A worker's exit code is all execute() sees (recovery-worker-exit-1). The
+  // worker leaves its own cause beside this status (src/recovery-entry.js);
+  // keep it with the error so status.json and the fleet report can say why.
+  const workerFailureFile = path.join(root, "recovery", "worker-failure.json");
+  const runWorker = async (...args) => {
+    const startedAt = Date.now();
+    try { return await run(...args); }
+    catch (error) {
+      const cause = read(workerFailureFile);
+      if (error && typeof error === "object" && cause?.message && Number(cause.at) >= startedAt - 1000) error.workerDetail = String(cause.message).slice(0, 600);
+      throw error;
+    }
+  };
+  const withCause = error => error?.workerDetail ? `${error.workerDetail} (${error.message})` : error.message;
+  const causeDetail = error => error?.workerDetail ? { lastErrorDetail: String(error.workerDetail).slice(0, 600) } : {};
   if (recoveredConfig.restored) log("restored recovery settings from validated local copy");
   const status = (value) => {
     write(stateFile, { schema: 1, channel, runId, launcherVersion: require("../package.json").version, checkedAt: now(), lastSuccessAt: previous?.lastSuccessAt || null, advertisedVersion, discoveryError: discoveryFailure, ...value });
@@ -287,7 +341,15 @@ async function recoverLocked({ homeDir = os.homedir(), env = process.env, now = 
     if (!updatesEnabled || discoveryAttempted) return;
     discoveryAttempted = true;
     diagnostic("discovery", "started");
-    try { desiredVersion = await discoverImpl(channel); advertisedVersion = desiredVersion; diagnostic("discovery", "succeeded", null, desiredVersion); log(`discovered ${desiredVersion} on ${channel}`); }
+    try {
+      desiredVersion = await discoverImpl(channel, { homeDir, now }); advertisedVersion = desiredVersion;
+      diagnostic("discovery", "succeeded", null, desiredVersion); log(`discovered ${desiredVersion} on ${channel}`);
+      const floor = provenFloor(root, channel);
+      if (floor && compare(desiredVersion, floor) === -1) {
+        log(`${desiredVersion} is older than ${floor}, which this computer already ran healthily; repairing with ${floor} instead`);
+        desiredVersion = floor;
+      }
+    }
     catch (error) { discoveryError = error; discoveryFailure = diagnostics.errorCode(error); diagnostic("discovery", "failed", error); log(`discovery failed: ${error.message}`); }
   };
   try {
@@ -430,14 +492,14 @@ async function recoverLocked({ homeDir = os.homedir(), env = process.env, now = 
         status({ ok: true, status: "reactivating", ...base });
         const activationAt = now();
         try {
-          await run(process.execPath, entry, [version, channel], { env: { ...env, RELAY_RECOVERY_WORKER: "1" } });
+          await runWorker(process.execPath, entry, [version, channel], { env: { ...env, RELAY_RECOVERY_WORKER: "1" } });
           const observed = await ready({ version }, activationAt);
           if (!observed.ok) throw new Error("reactivated-runtime-not-healthy");
           return proven({ ok: true, status: "current", desiredVersion: base.desiredVersion, version, repair: "reactivate", restarts: 0, lastSuccessAt: now(), failures: 0 }, observed);
         } catch (error) {
-          progress.fail(error.message);
-          log(`reactivate failed: ${error.message}`);
-          status({ ok: false, status: "reactivate-failed", ...base, lastError: String(error.message).slice(0, 300) });
+          progress.fail(withCause(error));
+          log(`reactivate failed: ${withCause(error)}`);
+          status({ ok: false, status: "reactivate-failed", ...base, lastError: String(error.message).slice(0, 300), ...causeDetail(error) });
           // Fall through to the download rung below.
         }
       }
@@ -466,7 +528,7 @@ async function recoverLocked({ homeDir = os.homedir(), env = process.env, now = 
       status({ ok: false, status: "restoring-local", desiredVersion, version: target.version, runtimeHealthy: false });
       try {
         const activationAt = now();
-        await run(process.execPath, path.join(target.packageRoot, "src", "recovery-entry.js"), [target.version, channel], { env: { ...env, RELAY_RECOVERY_WORKER: "1" } });
+        await runWorker(process.execPath, path.join(target.packageRoot, "src", "recovery-entry.js"), [target.version, channel], { env: { ...env, RELAY_RECOVERY_WORKER: "1" } });
         const observed = await ready({ version: target.version }, activationAt);
         if (!observed.ok) throw Error("local-runtime-not-healthy");
         diagnostic("local-fallback", "succeeded", null, target.version);
@@ -481,7 +543,7 @@ async function recoverLocked({ homeDir = os.homedir(), env = process.env, now = 
           return deferred || status({ ok: true, status: "deferred-update-in-flight", desiredVersion, version: current?.version, runtimeHealthy: false });
         }
         diagnostic("local-fallback", "failed", error, target.version);
-        progress.fail(error.message); log('local recovery failed: ' + error.message);
+        progress.fail(withCause(error)); log('local recovery failed: ' + withCause(error));
       }
     }
     if (!updatesEnabled) return status({ ok: true, status: "disabled", runtimeHealthy: runtimeVerified, runtimeAvailable: runtimeResponsive });
@@ -505,7 +567,8 @@ async function recoverLocked({ homeDir = os.homedir(), env = process.env, now = 
     const deferredBeforeDownload = deferToTransaction({ desiredVersion, ...repairState });
     if (deferredBeforeDownload) return deferredBeforeDownload;
     if (previous?.desiredVersion === desiredVersion && previous.retryAt > now()) return status({ ok: false, status: "backoff", desiredVersion, ...repairState,
-      failures: previous.failures, retryAt: previous.retryAt, lastError: previous.lastError });
+      failures: previous.failures, retryAt: previous.retryAt, lastError: previous.lastError,
+      ...(previous.lastErrorDetail ? { lastErrorDetail: previous.lastErrorDetail } : {}) });
     // Ordinary upgrades wait for pressure to clear. An unavailable installation
     // can use the final recovery route at a bounded cadence after local repairs.
     if (memoryNow.pressured) {
@@ -535,7 +598,7 @@ async function recoverLocked({ homeDir = os.homedir(), env = process.env, now = 
     const activationAt = now();
     const attemptId = crypto.randomUUID();
     try {
-      await run(process.execPath, entry, [desiredVersion, channel], { env: { ...env, RELAY_RECOVERY_WORKER: "1", RELAY_RECOVERY_ATTEMPT_ID: attemptId } });
+      await runWorker(process.execPath, entry, [desiredVersion, channel], { env: { ...env, RELAY_RECOVERY_WORKER: "1", RELAY_RECOVERY_ATTEMPT_ID: attemptId } });
       const observed = await ready({ version: desiredVersion }, activationAt);
       if (!observed.ok) throw new Error("replacement-not-healthy");
       return proven({ ok: true, status: "current", desiredVersion, version: desiredVersion, repair: "download", restarts: 0, lastSuccessAt: now(), failures: 0 }, observed);
@@ -545,7 +608,7 @@ async function recoverLocked({ homeDir = os.homedir(), env = process.env, now = 
       const deferred = deferToTransaction({ desiredVersion, ...repairState });
       if (deferred) return deferred;
       if (workerLostLock(error)) return status({ ok: true, status: "deferred-update-in-flight", desiredVersion, ...repairState, runtimeHealthy: false });
-      if (policy.failure(channel, desiredVersion, { id: attemptId, reason: error.message, since: activationAt })?.slept !== true) policy.interrupt();
+      if (policy.failure(channel, desiredVersion, { id: attemptId, reason: withCause(error), since: activationAt })?.slept !== true) policy.interrupt();
       throw error;
     }
   } catch (error) {
@@ -555,11 +618,11 @@ async function recoverLocked({ homeDir = os.homedir(), env = process.env, now = 
     let slept = false;
     try { slept = policy.sleptSince?.(runStartedAt) === true; } catch {}
     if (slept) return status({ ok: true, status: "deferred-asleep", desiredVersion: activeStatus?.desiredVersion || null, version: current?.version,
-      lastError: String(error.message).slice(0, 300) });
+      lastError: String(error.message).slice(0, 300), ...causeDetail(error) });
     const failures = previous && previous.desiredVersion === activeStatus?.desiredVersion ? (previous.failures || 0) + 1 : 1;
     return status({ ok: false, status: "failed", desiredVersion: activeStatus?.desiredVersion || null, version: current?.version,
       restarts: activeStatus?.restarts, staleSince: activeStatus?.staleSince,
-      failures, lastError: String(error.message).slice(0, 300), retryAt: now() + Math.min(60 * 60_000, CHECK_MS * 2 ** Math.min(failures - 1, 4)) });
+      failures, lastError: String(error.message).slice(0, 300), ...causeDetail(error), retryAt: now() + Math.min(60 * 60_000, CHECK_MS * 2 ** Math.min(failures - 1, 4)) });
   } finally {
     // Only our fresh UUID directory; never remove a canonical or rollback release.
     try { if (staged && path.dirname(staged) === downloads) fs.rmSync(staged, { recursive: true, force: true }); }

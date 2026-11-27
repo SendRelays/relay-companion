@@ -113,8 +113,12 @@ test("installer process death during bundle preparation leaves the prior launch 
     const {installRecovery}=require(${JSON.stringify(path.join(packageRoot, "bootstrap", "recovery-install.cjs"))});
     installRecovery({homeDir:${JSON.stringify(homeDir)},packageRoot:${JSON.stringify(source)},platform:'darwin',preserveNode:()=>process.execPath,
       runCommand:(_cmd,args)=>{if(args.includes('--self-check'))process.exit(19);return {status:0};}});
-  `], { windowsHide: true, timeout: 10000, encoding: "utf8" });
-  assert.equal(child.status, 19, child.stderr);
+  `], { windowsHide: true, encoding: "utf8",
+    // Only a hang guard. Before it dies the child copies and fsyncs every
+    // bootstrap file, which takes over 10 s on a loaded runner; a shorter limit
+    // killed it there (status null, SIGTERM) instead of letting it reach exit 19.
+    timeout: 300_000 });
+  assert.equal(child.status, 19, `${child.error?.code ? `spawn ${child.error.code}, ` : ""}signal ${child.signal}: ${child.stderr}`);
   assert.deepEqual(fs.readFileSync(path.join(root, "current.json")), pointer);
   assert.deepEqual(fs.readFileSync(first.launcher), launcher);
   assert.equal(spawnSync(process.execPath, [path.join(first.bundle, "bootstrap", "recovery-runner.cjs"), "--self-check"], { windowsHide: true }).status, 0);

@@ -63,7 +63,7 @@ export async function collectFleetTelemetryInBackground(context, signal, {
       if (signal.aborted) reject(signal.reason);
       else if (failure) reject(tagged(failure, "report", failure.code === "ERR_WORKER_OUT_OF_MEMORY" ? "worker-out-of-memory" : "worker-crashed"));
       else if (code !== 0) reject(tagged(new Error("telemetry-worker-failed"), "report", "worker-exited"));
-      else if (typeof report !== "string" || !report) reject(tagged(new Error("telemetry-worker-failed"), "report", "collection-failed"));
+      else if (!report || (typeof report !== "string" && typeof report.header !== "string")) reject(tagged(new Error("telemetry-worker-failed"), "report", "collection-failed"));
       else resolve(report);
     });
     worker.unref();
@@ -94,53 +94,63 @@ export function createFleetTelemetryCache({
     // That is a cancellation, not a failure of this computer.
     pending?.controller.abort(tagged(new Error("collection-cancelled"), "health", "collection-cancelled"));
   }
+  function sample(scope, freshMs = maxAgeMs) {
+    try {
+      const snapshot = context(scope);
+      const timestamp = now();
+      if (snapshot.key !== currentKey) {
+        reset();
+        currentKey = snapshot.key;
+      }
+      if (cached && timestamp >= cached.at && timestamp - cached.at < Math.max(freshMs, maxAgeMs)) return cached;
+      cached = null;
+      if (pending || (timestamp < retryAt && retryAt - timestamp <= retryMs)) return null;
+      const controller = new AbortController();
+      const run = { controller, generation, at: timestamp, slept: slept() };
+      pending = run;
+      const timer = setTimeout(() => controller.abort(tagged(new Error("deadline"), "health", "timeout")), timeoutMs);
+      timer.unref?.();
+      // collect's production implementation starts async execFile immediately.
+      // The rejection handler also covers synchronous setup failures.
+      void Promise.resolve().then(() => collect(snapshot, controller.signal)).then(result => {
+        if (controller.signal.aborted || run.generation !== generation) return;
+        const age = now() - run.at;
+        const header = typeof result === "string" ? result : result?.header;
+        const full = typeof result === "string" ? "" : String(result?.full || "");
+        if (age >= 0 && age < maxAgeMs && context(scope).key === snapshot.key
+            && typeof header === "string" && header.length <= 4096 && (header.length > 0 || full)) cached = { header, full, at: run.at };
+      }).catch((error) => {
+        // A computer that slept mid-check did not fail; say so instead.
+        const sleptThrough = sleepClock.sleptBetween(run.slept, slept());
+        const cancelled = error?.diagnosticCode === "collection-cancelled";
+        if (snapshot.homeDir) diagnostics.record({
+          component: "collector",
+          stage: error?.diagnosticStage || "health",
+          outcome: cancelled ? "skipped" : sleptThrough ? "deferred" : "failed",
+          code: sleptThrough && !cancelled ? "interrupted-by-sleep" : error?.diagnosticCode || "collection-failed",
+          elapsedMs: now() - run.at,
+        }, { homeDir: snapshot.homeDir });
+        // Diagnostic failures cannot fail the API request or escape as an
+        // unhandled rejection. Retry at most once per cooldown.
+      }).finally(() => {
+        clearTimeout(timer);
+        if (pending === run) pending = null;
+        if (run.generation === generation && !cached) retryAt = now() + retryMs;
+      });
+    } catch {
+      reset();
+    }
+    return null;
+  }
   return {
     reset,
-    header(scope = "") {
-      try {
-        const snapshot = context(scope);
-        const timestamp = now();
-        if (snapshot.key !== currentKey) {
-          reset();
-          currentKey = snapshot.key;
-        }
-        if (cached && timestamp >= cached.at && timestamp - cached.at < maxAgeMs) return cached.header;
-        cached = null;
-        if (pending || (timestamp < retryAt && retryAt - timestamp <= retryMs)) return "";
-        const controller = new AbortController();
-        const run = { controller, generation, at: timestamp, slept: slept() };
-        pending = run;
-        const timer = setTimeout(() => controller.abort(tagged(new Error("deadline"), "health", "timeout")), timeoutMs);
-        timer.unref?.();
-        // collect's production implementation starts async execFile immediately.
-        // The rejection handler also covers synchronous setup failures.
-        void Promise.resolve().then(() => collect(snapshot, controller.signal)).then(header => {
-          if (controller.signal.aborted || run.generation !== generation) return;
-          const age = now() - run.at;
-          if (age >= 0 && age < maxAgeMs && context(scope).key === snapshot.key
-              && typeof header === "string" && header.length > 0 && header.length <= 4096) cached = { header, at: run.at };
-        }).catch((error) => {
-          // A computer that slept mid-check did not fail; say so instead.
-          const sleptThrough = sleepClock.sleptBetween(run.slept, slept());
-          const cancelled = error?.diagnosticCode === "collection-cancelled";
-          if (snapshot.homeDir) diagnostics.record({
-            component: "collector",
-            stage: error?.diagnosticStage || "health",
-            outcome: cancelled ? "skipped" : sleptThrough ? "deferred" : "failed",
-            code: sleptThrough && !cancelled ? "interrupted-by-sleep" : error?.diagnosticCode || "collection-failed",
-            elapsedMs: now() - run.at,
-          }, { homeDir: snapshot.homeDir });
-          // Diagnostic failures cannot fail the API request or escape as an
-          // unhandled rejection. Retry at most once per cooldown.
-        }).finally(() => {
-          clearTimeout(timer);
-          if (pending === run) pending = null;
-          if (run.generation === generation && !cached) retryAt = now() + retryMs;
-        });
-      } catch {
-        reset();
-      }
-      return "";
-    },
+    /** The compact report for a request header, or "" while none is fresh. */
+    header(scope = "") { return sample(scope)?.header || ""; },
+    /**
+     * The whole report as JSON with its sample time, or null while none is fresh.
+     * A body upload may accept an older sample than a request header, so a slow
+     * collection (a loaded Windows machine) is not restarted before it is used.
+     */
+    full(scope = "", { freshMs = maxAgeMs } = {}) { const value = sample(scope, freshMs); return value?.full ? { report: value.full, at: value.at } : null; },
   };
 }

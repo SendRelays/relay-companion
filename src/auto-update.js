@@ -102,13 +102,44 @@ const UPDATE_STATE_FILE = "update-state.json";
 // fleet report so nobody has to ask a person for their update log.
 export const UPDATE_LOOP_FILE = "update-loop.json";
 const UPDATE_LOOP_REFRESH_MS = 5 * 60 * 1000;
+// The last few errors the update loop only logged (a worker that could not be
+// launched, an autostart repoint that threw), beside the update state, so the
+// fleet report can carry their text. bootstrap/update-watchdog.cjs appends
+// its deadline and exit failures to the same file.
+export const UPDATE_ERRORS_FILE = "update-errors.json";
+// After a worker found Relay work running, how soon to look again.
+export const BUSY_RETRY_MS = 2 * 60 * 1000;
+// A wait on Relay calls this long is reported as a problem (fleet-problems.js).
+export const BUSY_ATTENTION_MS = 6 * 60 * 60 * 1000;
+const UPDATE_ERRORS_KEPT = 6;
+
+function errorText(err) {
+  return String(err && err.message ? err.message : err).replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
+/** Append one error to the ring; a repeat of the newest only bumps its count. */
+export function recordUpdateError(file, { status, kind = null, reason = null, detail = null }, { now = () => Date.now() } = {}) {
+  try {
+    const stored = readUpdateState(file);
+    const errors = Array.isArray(stored?.errors) ? stored.errors.filter((entry) => entry && typeof entry === "object") : [];
+    const at = now();
+    const last = errors.at(-1);
+    if (last && last.status === status && last.kind === kind && last.detail === detail) {
+      errors[errors.length - 1] = { ...last, at, count: (Number(last.count) || 1) + 1 };
+    } else errors.push({ at, status, kind, reason, detail, count: 1 });
+    writeUpdateState(file, { schema: 1, errors: errors.slice(-UPDATE_ERRORS_KEPT) });
+  } catch {}
+}
 // Ticks that only mean "nothing was due this time": they do not replace the
 // last real decision.
 const UNREPORTED_LOOP_STATUSES = new Set(["not-due", "check-in-flight"]);
 
 // A short, stable error code for telemetry: never a message, path or URL.
 export function updateErrorCode(value) {
-  const raw = typeof value === "string" ? value : value && typeof value === "object" ? (value.code || value.name || "error") : "";
+  // A DOMException's legacy numeric code (23 for a timeout) says nothing on
+  // its own: prefer a string code (ENOTFOUND), else the name (TimeoutError).
+  const raw = typeof value === "string" ? value
+    : value && typeof value === "object" ? (typeof value.code === "string" && value.code ? value.code : value.name || "error") : "";
   const code = String(raw || "").toLowerCase().replace(/[^a-z0-9_.:-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
   return code || null;
 }
@@ -657,6 +688,14 @@ export function createAutoUpdater({
   // (kickstart -k would kill the running turn). Injected from the daemon; defaults to
   // "always idle" so the pure decision logic stays testable without runtime.
   hasActiveWork = () => false,
+  // Relay calls in progress anywhere on this computer (an AI app's tool call in
+  // the MCP broker, a session operation, a Relay-run AI turn): an update waits
+  // for them instead of starting and giving up half way. Each entry describes
+  // one call (bootstrap/update-activity.cjs describeCalls). Injected in tests.
+  runningCalls = () => {
+    try { return createRequire(import.meta.url)("../bootstrap/update-activity.cjs").describeCalls().filter((call) => call.alive); }
+    catch { return []; }
+  },
   // Fleet-restart politeness (see DEFAULT_RESTART_COOLDOWN_MS). 0 disables the
   // cooldown — used by manual `relay update`, where the user asked right now.
   restartCooldownMs = Number.isFinite(Number(env.RELAY_UPDATE_RESTART_COOLDOWN_MS))
@@ -665,6 +704,7 @@ export function createAutoUpdater({
   updateStatePath = path.join(storeDir(), UPDATE_STATE_FILE),
   // Beside the update state by default, so a test's private store keeps it too.
   updateLoopPath = path.join(path.dirname(updateStatePath), UPDATE_LOOP_FILE),
+  updateErrorsPath = path.join(path.dirname(updateStatePath), UPDATE_ERRORS_FILE),
   // Honour the persisted failure backoff. false = attempt right now regardless of how
   // many times this version has failed — used by manual `relay update`, where the user
   // is present, asked explicitly, and is very likely retrying because they JUST fixed
@@ -754,6 +794,14 @@ export function createAutoUpdater({
     state.workerBusyUntil = t + Math.max(0, workerBusyRetryMs);
   }
 
+  // A launch that threw: keep its text for the fleet report (update-errors.json
+  // and the loop decision), not only in the log.
+  function launchFailure(result, err, t) {
+    const detail = errorText(err);
+    recordUpdateError(updateErrorsPath, { status: result.status, kind: "launch", reason: updateErrorCode(err), detail }, { now: () => t });
+    return { ...result, detail };
+  }
+
   function admittedLaunch(result) {
     if (!result) return false;
     return typeof result.status !== "string" || result.status === "admitted" || (result.status === "failed" && Boolean(result.admittedAt));
@@ -791,10 +839,49 @@ export function createAutoUpdater({
     }
   }
 
+  // Waiting on Relay calls is never a failure, but it is never silent either:
+  // the decision names what it waits on and since when (update-loop.json), and
+  // a wait past BUSY_ATTENTION_MS is reported as a problem by the fleet report,
+  // so a call that hangs or leaks shows up instead of a computer that quietly
+  // never updates.
+  function callsWait(t, latest) {
+    let calls = [];
+    try { calls = runningCalls() || []; } catch { calls = []; }
+    // A worker found work running a moment ago (noteUpdateFailure): give it a
+    // little while, still reported as the same wait.
+    if (!calls.length && state.busyTarget === latest && Number(state.busyRetryAt) > t) {
+      return busyDeferral(t, latest, [], state.busyDetail);
+    }
+    if (!calls.length) {
+      if (state.busyTarget === latest) { state.busySince = null; state.busyTarget = null; state.busyRetryAt = 0; state.busyDetail = null; }
+      return null;
+    }
+    return busyDeferral(t, latest, calls);
+  }
+
+  function busyDeferral(t, latest, calls = [], detail = null) {
+    if (state.busyTarget !== latest || !state.busySince) { state.busyTarget = latest; state.busySince = t; }
+    const { summarizeCalls } = createRequire(import.meta.url)("../bootstrap/update-activity.cjs");
+    const described = summarizeCalls(calls) || detail || "Relay calls in progress";
+    state.busyDetail = described;
+    return { status: "deferred-calls", current: runningVersion, latest, reason: "relay-calls-active",
+      detail: described, busySince: state.busySince, ...(Number(state.busyRetryAt) > t ? { retryAt: state.busyRetryAt } : {}) };
+  }
+
   // Record one failed end-to-end attempt and decide how long to wait before the next.
   // Prefer a terminal worker result; use an observation deadline only when the
   // worker cannot be observed. Persist the request identity to survive restarts.
   function noteUpdateFailure(target, t, result = null) {
+    // The worker found Relay work running and changed nothing: not a failure of
+    // this release. Check again soon; the decision says what it waited on.
+    if (result?.reason === "activation-busy") {
+      writeUpdateAttempt(updateStatePath, null);
+      activeAttempt = null;
+      state.busyRetryAt = t + BUSY_RETRY_MS;
+      busyDeferral(t, target, Array.isArray(result.blocking) ? result.blocking : [], typeof result.detail === "string" ? result.detail : null);
+      log(`auto-update: waiting for Relay work to finish before installing ${target}${result.detail ? ` (${result.detail})` : ""}`);
+      return;
+    }
     let recorded = null;
     try { recorded = releasePolicy.failure(activeAttempt?.channel || liveChannel(), target, { id: activeAttempt?.id, reason: result?.reason || "update-failed", since: activeAttempt?.startedAt || null }); }
     catch (error) { log(`release failure history could not be saved: ${error.message}`); }
@@ -902,6 +989,8 @@ export function createAutoUpdater({
     // long as necessary, but because pending updates are checked on EVERY daemon
     // loop it launches within seconds of the final turn becoming idle.
     if (busy()) return { status: "deferred-busy", current: runningVersion, latest };
+    const calls = callsWait(t, latest);
+    if (calls) return calls;
     const asleep = sleepDeferral({ latest });
     if (asleep) return asleep;
     const workerBusy = workerBusyWait(t, runningVersion, { latest });
@@ -936,7 +1025,7 @@ export function createAutoUpdater({
     } catch (err) {
       state.updating = false;
       log(`auto-update launch failed: ${err && err.message ? err.message : String(err)}`);
-      return { status: "launch-failed", current: runningVersion, latest };
+      return launchFailure({ status: "launch-failed", current: runningVersion, latest }, err, t);
     }
     if (!admittedLaunch(launch)) {
       state.updating = false;
@@ -1019,6 +1108,19 @@ export function createAutoUpdater({
     return { status: "discovered", current: runningVersion, latest };
   }
 
+  // What a tick's result says beyond its status: a launch error's text, the
+  // journal's recorded failure while recovery is stuck or parked, or the
+  // health check that sent an explicit repair. Bounded; sanitised when reported.
+  function loopCause(result) {
+    const failure = result?.recovery?.failure && typeof result.recovery.failure === "object" ? result.recovery.failure : null;
+    const health = result?.health && typeof result.health === "object" ? result.health : null;
+    const reason = result?.reason || failure?.reason || health?.reason || null;
+    const text = typeof result?.detail === "string" && result.detail ? result.detail
+      : failure ? [failure.phase, failure.reason, failure.detail].filter(Boolean).join(": ")
+        : health?.detail ? String(health.detail) : "";
+    return { reason, detail: text ? String(text).replace(/\s+/g, " ").trim().slice(0, 300) : null };
+  }
+
   // Record the decision a tick reached, for the fleet report. Unchanged
   // decisions are refreshed at most every five minutes; failures to write are
   // never allowed to affect updating itself.
@@ -1029,17 +1131,20 @@ export function createAutoUpdater({
       const status = String(result?.status || "unknown").slice(0, 60);
       if (UNREPORTED_LOOP_STATUSES.has(status)) return;
       const version = (value) => (typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value) ? value : null);
+      const cause = loopCause(result);
       const decision = {
         schema: 1,
         status,
         running: version(runningVersion),
         latest: version(result?.latest),
         pending: version(state.pendingVersion),
-        retryAt: Number.isFinite(result?.retryAt) ? result.retryAt : null,
-        reason: result?.reason ? updateErrorCode(result.reason) : null,
+        retryAt: Number.isFinite(result?.retryAt) ? result.retryAt : Number.isFinite(result?.recoverAfter) ? result.recoverAfter : null,
+        reason: cause.reason ? updateErrorCode(cause.reason) : null,
         lastCheckAt: state.lastCheckAt || null,
         checkFailures: state.consecutiveCheckFailures || 0,
         checkError: state.lastCheckError || null,
+        ...(cause.detail ? { detail: cause.detail } : {}),
+        ...(Number.isFinite(result?.busySince) ? { busySince: result.busySince } : {}),
       };
       const key = JSON.stringify({ ...decision, lastCheckAt: null });
       if (key === lastLoopKey && t - lastLoopWrittenAt < UPDATE_LOOP_REFRESH_MS) return;
@@ -1112,7 +1217,7 @@ export function createAutoUpdater({
           });
         } catch (err) {
           log(`canonical runtime rescue launch failed: ${err && err.message ? err.message : String(err)}`);
-          return { status: "rescue-launch-failed", current: runningVersion, onDisk: canonical.version };
+          return launchFailure({ status: "rescue-launch-failed", current: runningVersion, onDisk: canonical.version }, err, t);
         }
         if (!admittedLaunch(launch)) {
           const status = rejectedLaunchStatus(launch, "rescue-launch-failed");
@@ -1148,11 +1253,13 @@ export function createAutoUpdater({
         }
         if (busy()) return { status: "deferred-repoint-busy", current: runningVersion, onDisk: canonical.version };
         let launched = false;
+        let repointError = null;
         try {
           launched = repointAutostart({ canonical, platform, log });
         } catch (err) {
           log(`autostart repoint failed: ${err && err.message ? err.message : String(err)}`);
           launched = false;
+          repointError = err;
         }
         // Record before reporting success: the repair replaces this very process,
         // so there is no later moment in which to write the attempt down. A boot
@@ -1167,7 +1274,8 @@ export function createAutoUpdater({
           state.updateStartedAt = t;
           return { status: "repointing-autostart", current: runningVersion, onDisk: canonical.version };
         }
-        return { status: "autostart-repoint-failed", current: runningVersion, onDisk: canonical.version };
+        return launchFailure({ status: "autostart-repoint-failed", current: runningVersion, onDisk: canonical.version },
+          repointError || "autostart repoint was not launched", t);
       }
       return { status: "stale-process", current: runningVersion, onDisk: canonical.version };
     }
@@ -1191,7 +1299,7 @@ export function createAutoUpdater({
           });
         } catch (err) {
           log(`canonical runtime repair launch failed: ${err && err.message ? err.message : String(err)}`);
-          return { status: "repair-launch-failed", current: runningVersion, health };
+          return launchFailure({ status: "repair-launch-failed", current: runningVersion, health }, err, t);
         }
         if (!admittedLaunch(launch)) {
           return { status: rejectedLaunchStatus(launch, "repair-launch-failed"), current: runningVersion, health };
@@ -1248,7 +1356,11 @@ export function createAutoUpdater({
         if (latestResolved) return latest;
         latestResolved = true;
         try { latest = await getLatestVersion({ channel: liveChannel() }); }
-        catch (err) { log(`recovery release check failed: ${err && err.message ? err.message : String(err)}`); }
+        catch (err) {
+          log(`recovery release check failed: ${err && err.message ? err.message : String(err)}`);
+          state.lastCheckError = updateErrorCode(err) || "unclassified";
+          recordUpdateError(updateErrorsPath, { status: "recovery-release-check-failed", kind: "check", reason: state.lastCheckError, detail: errorText(err) }, { now: () => t });
+        }
         return latest;
       };
       // The release this episode would try next if it superseded the candidate:
@@ -1317,7 +1429,7 @@ export function createAutoUpdater({
         });
       } catch (err) {
         log(`canonical runtime recovery launch failed: ${err && err.message ? err.message : String(err)}`);
-        return { status: "recovery-launch-failed", current: runningVersion, recovery: canonicalState };
+        return launchFailure({ status: "recovery-launch-failed", current: runningVersion, recovery: canonicalState }, err, t);
       }
       if (!admittedLaunch(launch)) {
         return { status: rejectedLaunchStatus(launch, "recovery-launch-failed"), current: runningVersion, recovery: canonicalState };
@@ -1371,7 +1483,7 @@ export function createAutoUpdater({
       } catch (err) {
         state.updating = false;
         log(`canonical runtime migration launch failed: ${err && err.message ? err.message : String(err)}`);
-        return { status: "migration-launch-failed", current: runningVersion };
+        return launchFailure({ status: "migration-launch-failed", current: runningVersion }, err, t);
       }
       if (!admittedLaunch(launch)) {
         state.updating = false;

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { updateChannel } from "./config.js";
@@ -38,6 +38,139 @@ const {
 } = require("../bootstrap/runtime-health.cjs");
 
 export { exactRuntimeHealth };
+
+// ---- Delegated activation ----
+// The update worker is the RUNNING release's code. From this release on, when
+// the release being installed ships src/activation-entry.js, the worker runs
+// that release's own activation code for the switch, so a fix to activation
+// takes effect on the very update that ships it. The worker keeps the lock,
+// has already verified the tree, and restores itself with its own code if the
+// new code crashes, overruns or fails. Releases before this one never
+// delegate: they keep activating with their own code, as they always did.
+export const ACTIVATION_ENTRY = path.join("src", "activation-entry.js");
+export const ACTIVATION_RESULT_PREFIX = "RELAY_ACTIVATION_RESULT ";
+// Activation's own bounds: registrations (30 s), service restart (90 s),
+// readiness proof (90 s), the Mac transaction around them. Generous, so a
+// slow but healthy activation is never killed half way.
+export const DELEGATED_ACTIVATION_TIMEOUT_MS = 8 * 60_000;
+const DELEGATED_OUTPUT_LIMIT = 256 * 1024;
+
+/** Whether `candidate` can activate itself. RELAY_DELEGATED_ACTIVATION=0 turns it off. */
+export function canDelegateActivation(candidate, { env = process.env, existsSync = fs.existsSync } = {}) {
+  if (String(env?.RELAY_DELEGATED_ACTIVATION ?? "").trim() === "0") return false;
+  if (!candidate?.packageRoot || !candidate?.node || !candidate?.bin) return false;
+  try { return existsSync(path.join(candidate.packageRoot, ACTIVATION_ENTRY)); } catch { return false; }
+}
+
+/**
+ * Run `owner`'s activation entry: mode "activate" switches to `target`
+ * (owner itself), "restore" puts `target` (the release owner was replacing)
+ * back. `completed: true` means owner's code ran to the end and gave a
+ * verdict; a crash, overrun or unreadable answer is `completed: false`.
+ */
+export function runDelegatedActivation(mode, target, {
+  owner,
+  homeDir = os.homedir(),
+  platform = process.platform,
+  options = {},
+  spawnImpl = spawn,
+  timeoutMs = DELEGATED_ACTIVATION_TIMEOUT_MS,
+  env = process.env,
+  log = () => {},
+} = {}) {
+  const payload = Buffer.from(JSON.stringify({ schema: 1, mode, target, homeDir, platform, options }), "utf8").toString("base64url");
+  const entry = path.join(owner.packageRoot, ACTIVATION_ENTRY);
+  return new Promise((resolve) => {
+    let child;
+    let output = "";
+    let errors = "";
+    let settled = false;
+    let timer = null;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve({ ...result, delegated: true, delegatedTo: owner.version });
+    };
+    try {
+      child = spawnImpl(owner.node, [entry, payload], {
+        env: { ...env, [ACTIVE_UPDATE_WORKER_ENV]: "1", RELAY_ACTIVATION_WORKER: "1", ELECTRON_RUN_AS_NODE: undefined },
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch (error) {
+      finish({ ok: false, completed: false, reason: "delegated-activation-spawn-failed", detail: String(error?.message || error) });
+      return;
+    }
+    timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      finish({ ok: false, completed: false, reason: "delegated-activation-timeout", detail: `no verdict after ${timeoutMs}ms` });
+    }, timeoutMs);
+    timer.unref?.();
+    child.stdout?.on("data", (chunk) => { if (output.length < DELEGATED_OUTPUT_LIMIT) output += String(chunk); });
+    child.stderr?.on("data", (chunk) => { if (errors.length < 8_192) errors += String(chunk); });
+    child.on("error", (error) => finish({ ok: false, completed: false, reason: "delegated-activation-spawn-failed", detail: String(error?.message || error) }));
+    child.on("close", (code, signal) => {
+      const line = output.split(/\r?\n/).reverse().find((value) => value.startsWith(ACTIVATION_RESULT_PREFIX));
+      let verdict = null;
+      try { verdict = line ? JSON.parse(line.slice(ACTIVATION_RESULT_PREFIX.length)) : null; } catch { verdict = null; }
+      if (verdict && typeof verdict === "object" && typeof verdict.ok === "boolean") {
+        if (!verdict.ok) log(`delegated ${mode} by ${owner.version} failed: ${verdict.reason || "unknown"}`);
+        finish({ ...verdict, completed: true });
+      } else {
+        const tail = errors.trim().split(/\r?\n/).slice(-3).join(" | ").slice(0, 1_000);
+        finish({ ok: false, completed: false, reason: "delegated-activation-no-verdict", detail: `exit=${code} signal=${signal || ""} ${tail}`.trim() });
+      }
+    });
+  });
+}
+
+/**
+ * After a rollback whose proof failed: is the restored release's daemon in
+ * fact the one serving? Exactly one daemon from its tree and no other, its
+ * heartbeat fresh and naming its version, and its probe answering, on two
+ * samples `gapMs` apart. A stray broker or a missing pill does not count
+ * against it: the daemon's own guards heal those (canonical-runtime.js,
+ * servingDespiteFailedRollback). An observer that cannot list processes
+ * proves nothing.
+ */
+export async function confirmRuntimeServing(target, {
+  homeDir = os.homedir(),
+  platform = process.platform,
+  run = defaultRun,
+  health = exactRuntimeHealth,
+  probe = (role, value, options) => require("../bootstrap/recovery-probe.cjs").requestProbe(role, value, options),
+  readHeartbeat = () => JSON.parse(fs.readFileSync(path.join(homeDir, ".relay", "recovery", "daemon.json"), "utf8")),
+  hasProbe = (value) => fs.existsSync(path.join(value.packageRoot, "bootstrap", "recovery-probe.cjs")),
+  now = Date.now,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  samples = 2,
+  gapMs = 10_000,
+  heartbeatFreshMs = 60_000,
+} = {}) {
+  if (!target?.bin || !target?.packageRoot || !target?.version) return { ok: false, reason: "serving-target-invalid" };
+  let observed = null;
+  for (let sample = 0; sample < samples; sample += 1) {
+    if (sample > 0) await sleep(gapMs);
+    observed = health(target, { platform, run });
+    if (!observed?.known || observed.daemon !== true || observed.oldDaemon === true) {
+      return { ok: false, reason: "daemon-not-serving", detail: JSON.stringify({ known: observed?.known, daemon: observed?.daemon, oldDaemon: observed?.oldDaemon }) };
+    }
+    let beat = null;
+    try { beat = readHeartbeat(); } catch {}
+    const age = now() - Number(beat?.at);
+    if (beat?.version !== target.version || !Number.isFinite(age) || age < 0 || age >= heartbeatFreshMs) {
+      return { ok: false, reason: "daemon-heartbeat-stale" };
+    }
+    // Releases older than the probe protocol cannot answer it; the process
+    // and the heartbeat are then the strongest evidence there is.
+    if (hasProbe(target)) {
+      const answer = await probe("daemon", target, { homeDir, timeoutMs: 3000 });
+      if (answer?.ok !== true) return { ok: false, reason: answer?.reason || "daemon-probe-failed" };
+    }
+  }
+  return { ok: true, pill: observed.pill === true, oldBroker: observed.oldBroker === true, oldPill: observed.oldPill === true };
+}
 
 export async function installSignedRuntimeCandidate({ stagingRoot, version, platform = process.platform, log } = {}) {
   try {
@@ -121,15 +254,34 @@ export function smokeCanonicalCandidate(candidate, { run = defaultRun, log = () 
  * (runtime-good.json, runtime-previous-good.json), which are its offline
  * recovery sources. `recoveryBackups` counts the backups actually recorded.
  */
+// Below this much free space on the disk that holds ~/.relay, Relay keeps one
+// recovery backup instead of two: each release copy is close to 900 MB, and on
+// 2026-11-27 a Mac with 4.7 GB free held five of them. The newest proven
+// release (runtime-good.json) is always kept.
+export const LOW_DISK_FREE_BYTES = 5 * 1024 ** 3;
+
+/** Free and total bytes of the disk holding `directory`, or null when unknown. */
+export function diskSpace(directory, { statfs = fs.statfsSync } = {}) {
+  try {
+    const stats = statfs(directory);
+    const free = Number(stats.bavail) * Number(stats.bsize), total = Number(stats.blocks) * Number(stats.bsize);
+    return Number.isFinite(free) && Number.isFinite(total) && total > 0 ? { freeBytes: free, totalBytes: total } : null;
+  } catch { return null; }
+}
+
 export function keptReleaseRoots({
   homeDir = os.homedir(),
   platform = process.platform,
   getProtectedPackageRoots = processReferencedCanonicalRoots,
   fsImpl = fs,
+  space = () => diskSpace(homeDir),
 } = {}) {
   const protectedPackageRoots = [...getProtectedPackageRoots({ homeDir, platform })];
   let recoveryBackups = 0;
-  for (const name of ["runtime-good.json", "runtime-previous-good.json"]) {
+  let free = null;
+  try { free = space()?.freeBytes ?? null; } catch {}
+  const lowDisk = Number.isFinite(free) && free < LOW_DISK_FREE_BYTES;
+  for (const name of lowDisk ? ["runtime-good.json"] : ["runtime-good.json", "runtime-previous-good.json"]) {
     try {
       const good = JSON.parse(fsImpl.readFileSync(path.join(homeDir, ".relay", "recovery", name), "utf8"));
       if (typeof good?.packageRoot === "string") {
@@ -138,7 +290,34 @@ export function keptReleaseRoots({
       }
     } catch {}
   }
-  return { protectedPackageRoots, recoveryBackups };
+  return { protectedPackageRoots, recoveryBackups, lowDisk };
+}
+
+// Update request records (update-requests/<id>.json) were never removed: a Mac
+// had 4,127 of them on 2026-11-27. Keep the newest KEEP_UPDATE_REQUESTS and any
+// written in the last hour; remove the rest once finished, or once a day old
+// whatever their state (an unfinished request a day old is abandoned).
+export const KEEP_UPDATE_REQUESTS = 50;
+export function pruneUpdateRequests({ homeDir = os.homedir(), platform = process.platform, fsImpl = fs, now = Date.now } = {}) {
+  const directory = requestDirectory(homeDir, platform);
+  let names;
+  try { names = fsImpl.readdirSync(directory).filter((name) => /^[A-Za-z0-9-]{1,80}\.json$/.test(name)); } catch { return { removed: 0 }; }
+  const records = names.map((name) => {
+    const file = path.join(directory, name);
+    let modified = 0;
+    try { modified = fsImpl.statSync(file).mtimeMs; } catch {}
+    return { file, modified };
+  }).sort((a, b) => b.modified - a.modified);
+  let removed = 0;
+  for (const record of records.slice(KEEP_UPDATE_REQUESTS)) {
+    const age = now() - record.modified;
+    if (!(age >= 60 * 60_000)) continue;
+    let state = null;
+    try { state = JSON.parse(fsImpl.readFileSync(record.file, "utf8"))?.state || null; } catch {}
+    if (!["completed", "failed", "rejected"].includes(state) && age < 24 * 60 * 60_000) continue;
+    try { fsImpl.rmSync(record.file, { force: true }); removed += 1; } catch {}
+  }
+  return { removed, kept: records.length - removed };
 }
 
 export function processReferencedCanonicalRoots({
@@ -164,11 +343,20 @@ export function processReferencedCanonicalRoots({
     .filter((packageRoot) => commands.some((command) => normalize(command).includes(normalize(packageRoot))));
 }
 
+// How long activation waits, behind the barrier that holds new Relay calls
+// back, for calls already running to finish. The updater checks for running
+// calls before it starts (runCanonicalUpdateTransaction), so this only covers a
+// call that began in between; holding new calls back longer would itself
+// interrupt people.
+export const ACTIVATION_DRAIN_ATTEMPTS = 180; // 90 s at 500 ms
+
 export async function activateCanonicalRuntime(target, options = {}) {
   let release;
+  let drained = false;
   try {
     const drain = options.drain || require("../bootstrap/update-activity.cjs").drainCalls;
-    release = await drain({ homeDir: options.homeDir, sleep: options.sleep });
+    release = await drain({ homeDir: options.homeDir, sleep: options.sleep, attempts: options.drainAttempts ?? ACTIVATION_DRAIN_ATTEMPTS });
+    drained = true;
     const activateReady = async () => {
       const activated = await activateDrainedRuntime(target, options);
       if (!activated.ok) return activated;
@@ -187,8 +375,17 @@ export async function activateCanonicalRuntime(target, options = {}) {
       return await transaction(target, activateReady, options);
     }
     return await activateReady();
-  } catch (error) { return { ok: false, reason: "activation-drain-failed", detail: error.message }; }
-  finally { release?.(); }
+  } catch (error) {
+    // Nothing has been changed before the drain finishes: Relay work still
+    // running is a reason to wait, never a failed activation to roll back.
+    // 2026-11-26: a Mac turned "busy" into "recovery required" this way, and
+    // every repair after it waited on the same call and gave up the same way.
+    if (!drained) {
+      return { ok: false, unchanged: true, reason: error?.code === "relay-calls-active" ? "activation-busy" : "activation-drain-failed",
+        detail: error?.message || String(error), ...(Array.isArray(error?.blocking) ? { blocking: error.blocking } : {}) };
+    }
+    return { ok: false, reason: "activation-threw", detail: error?.message || String(error) };
+  } finally { release?.(); }
 }
 
 /** Rewrite the shared MCP broker descriptor to name `target`'s broker. Never throws. */
@@ -315,6 +512,10 @@ export async function runCanonicalUpdateTransaction({
   platform = process.platform,
   log = () => {},
   activate = activateCanonicalRuntime,
+  confirmServing = confirmRuntimeServing,
+  canDelegate = canDelegateActivation,
+  delegateActivation = runDelegatedActivation,
+  runningCalls = () => require("../bootstrap/update-activity.cjs").describeCalls({ homeDir }).filter((call) => call.alive),
   repair = repairCanonicalRuntime,
   installCandidate = installSignedRuntimeCandidate,
   smoke = smokeCanonicalCandidate,
@@ -351,7 +552,8 @@ export async function runCanonicalUpdateTransaction({
     try {
       const result = await operation();
       diagnostic(name, result?.ok === false ? "failed" : "succeeded", result?.reason || (result?.ok === false ? result?.detail : null), now() - startedAt);
-      if (result?.ok === false && ["activation", "startup-verification"].includes(name)) {
+      // Relay work still running says nothing about the release: no cooldown.
+      if (result?.ok === false && result.reason !== "activation-busy" && ["activation", "startup-verification"].includes(name)) {
         noteReleaseFailure(result.reason);
       }
       log(`stage ${name} ${result?.ok === false ? "failed" : "finished"}; elapsed=${Math.max(0, now() - startedAt)}ms`);
@@ -414,6 +616,7 @@ export async function runCanonicalUpdateTransaction({
       : { ok: true },
     onLockAcquired: admit,
     lockIdentity,
+    confirmServing: (target) => confirmServing(target, { homeDir, platform }),
   }));
   if (!recovered.ok && !(supersedeBrokenRecovery && recovered.phase === "recovery")) return recovered;
   if (recovered.recovered) return recovered;
@@ -424,6 +627,21 @@ export async function runCanonicalUpdateTransaction({
   const previous = readCanonicalRuntime({ homeDir, platform });
   const legacy = previous || supersedeBrokenRecovery ? null : legacyRuntimeTarget(runningPackageRoot, runningVersion, { node: serviceNode, platform });
   if (!previous && !legacy && !supersedeBrokenRecovery) return { ok: false, phase: "input", reason: "legacy-runtime-invalid" };
+  // An ordinary update waits while Relay work is running, before it downloads
+  // or changes anything; the daemon tries again shortly (auto-update.js). A
+  // repair of a broken installation does not wait here: its activation drain
+  // still lets running calls finish.
+  if (!supersedeBrokenRecovery) {
+    let running = [];
+    try { running = runningCalls(); } catch {}
+    if (running.length) {
+      const { summarizeCalls } = require("../bootstrap/update-activity.cjs");
+      const detail = summarizeCalls(running);
+      log(`waiting: Relay work is running (${detail})`);
+      diagnostic("activation", "deferred", "activation-busy");
+      return { ok: false, phase: "busy", reason: "activation-busy", unchanged: true, detail, blocking: running };
+    }
+  }
   return repair({
     archiveRecoveryJournal: supersedeBrokenRecovery,
     version,
@@ -446,14 +664,32 @@ export async function runCanonicalUpdateTransaction({
     preCommitVerify: (candidate) => stage("startup-verification", () => smoke(candidate, { log })),
     postCommitActivate: async (candidate) => {
       log(`activating ${candidate.version} from ${candidate.packageRoot}`);
-      return stage("activation", () => activate(candidate, { homeDir, platform,
-        allowRebuildRegistrations: supersedeBrokenRecovery }));
+      const options = { allowRebuildRegistrations: supersedeBrokenRecovery };
+      if (canDelegate(candidate)) {
+        log(`activation delegated to ${candidate.version}'s own code`);
+        return stage("activation", () => delegateActivation("activate", candidate, { owner: candidate, homeDir, platform, options, log }));
+      }
+      return stage("activation", () => activate(candidate, { homeDir, platform, ...options }));
     },
+    confirmServing: (target) => confirmServing(target, { homeDir, platform }),
     rollbackActivate: async (target, context) => {
       if (!target) return { ok: true };
       if (context?.activation?.unchanged === true) return { ok: true };
       log(`restoring runtime targets to ${target.packageRoot}`);
-      return stage("rollback", () => activate(target, { homeDir, platform, restoreRegistrations: true, repairExecutable: context?.failed }));
+      const options = { restoreRegistrations: true, repairExecutable: context?.failed };
+      return stage("rollback", async () => {
+        // The new release's code ran to the end and gave a verdict: it is the
+        // newer code, so it restores first. A crash or overrun of that code is
+        // never trusted with the rollback, and this release's own code always
+        // has the last word.
+        const failed = context?.failed;
+        if (failed && context?.activation?.delegated === true && context.activation.completed === true && canDelegate(failed)) {
+          const restored = await delegateActivation("restore", target, { owner: failed, homeDir, platform, options, log });
+          if (restored.ok) return restored;
+          log(`delegated restore by ${failed.version} failed (${restored.reason || "unknown"}); restoring with ${runningVersion || "this release"}'s own code`);
+        }
+        return activate(target, { homeDir, platform, ...options });
+      });
     },
   });
 }

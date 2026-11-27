@@ -189,6 +189,11 @@ function collectInstallationHealth({ homeDir = os.homedir(), platform = process.
       checkedAt: supervisor?.checkedAt > 0 ? new Date(supervisor.checkedAt).toISOString() : null,
       desiredVersion: supervisor?.desiredVersion || null,
       lastSuccessAt: supervisor?.lastSuccessAt > 0 ? new Date(supervisor.lastSuccessAt).toISOString() : null,
+      // When the runner tries again, how often it restarted the service and
+      // since when the runtime looked stale. Absent when the runner did not say.
+      ...(supervisor?.retryAt > 0 ? { retryAt: new Date(supervisor.retryAt).toISOString() } : {}),
+      ...(Number.isSafeInteger(supervisor?.restarts) && supervisor.restarts > 0 ? { restarts: Math.min(supervisor.restarts, 1000) } : {}),
+      ...(supervisor?.staleSince > 0 ? { staleSince: new Date(supervisor.staleSince).toISOString() } : {}),
       monitor: { state: monitor.state, repairStatus: monitor.repairStatus,
         lastRepairAt: monitor.lastRepairAt > 0 ? new Date(monitor.lastRepairAt).toISOString() : null },
       // Do not upload logs, URLs, usernames, or raw errors. These stay in doctor.

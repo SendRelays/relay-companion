@@ -1328,3 +1328,54 @@ test("the update loop records why it is or is not updating, for the fleet report
   assert.equal(failed.checkError, "enotfound");
   assert.doesNotMatch(JSON.stringify(failed), /Users|getaddrinfo|registry\.npmjs/, "no message, path or host leaves the machine");
 });
+
+test("a launch that throws and a journal still activating keep their cause in the loop record and the error ring", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-update-loop-cause-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packageRoot = path.join(os.homedir(), ".relay", "runtime", "releases", "test", "node_modules", "relay-companion");
+  let clock = 1_000_000;
+  const updater = createAutoUpdater({
+    platform: "darwin", packageRoot, now: () => clock,
+    getCurrentVersion: () => "1.0.0", getCurrentChannel: () => "dev",
+    getCanonicalRuntime: () => ({ packageRoot, version: "1.0.0" }), getCanonicalRuntimeState: () => null,
+    getLatestVersion: async () => "1.0.1", updateStatePath: path.join(root, "update-state.json"),
+    spawnUpdate: () => { throw Object.assign(new Error("spawn EACCES /opt/node"), { code: "EACCES" }); },
+    checkIntervalMs: 60_000, restartCooldownMs: 0, releasePolicy: { decision: () => ({ blocked: false }), failure: () => ({}) },
+  });
+  const result = await updater.tick();
+  assert.equal(result.status, "launch-failed");
+  assert.equal(result.detail, "spawn EACCES /opt/node");
+  const loop = JSON.parse(fs.readFileSync(path.join(root, "update-loop.json"), "utf8"));
+  assert.equal(loop.detail, "spawn EACCES /opt/node");
+  const ring = JSON.parse(fs.readFileSync(path.join(root, "update-errors.json"), "utf8"));
+  assert.deepEqual(ring.errors.map(({ status, kind, reason, detail, count }) => ({ status, kind, reason, detail, count })),
+    [{ status: "launch-failed", kind: "launch", reason: "eacces", detail: "spawn EACCES /opt/node", count: 1 }]);
+  clock += 120_000;
+  await updater.tick();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, "update-errors.json"), "utf8")).errors[0].count, 2, "a repeat only counts");
+
+  const activating = createAutoUpdater({
+    platform: "darwin", packageRoot, now: () => clock,
+    getCurrentVersion: () => "1.0.0", getCurrentChannel: () => "dev",
+    getCanonicalRuntime: () => null,
+    getCanonicalRuntimeState: () => ({ state: "activating", preparedAt: clock - 1000, candidate: { version: "1.0.1" },
+      failure: { phase: "activate", reason: "exact-root-health-failed", detail: "no heartbeat" } }),
+    getLatestVersion: async () => "1.0.1", updateStatePath: path.join(root, "a", "update-state.json"),
+    checkIntervalMs: 60_000, restartCooldownMs: 0, retryCooldownMs: 120_000,
+  });
+  assert.equal((await activating.tick()).status, "activation-in-flight");
+  const inFlight = JSON.parse(fs.readFileSync(path.join(root, "a", "update-loop.json"), "utf8"));
+  assert.equal(inFlight.retryAt, clock - 1000 + 120_000, "recoverAfter is when it is retried");
+  assert.equal(inFlight.reason, "exact-root-health-failed");
+  assert.equal(inFlight.detail, "activate: exact-root-health-failed: no heartbeat");
+});
+
+test("an update check error is reported by its string code or its name, never a bare legacy number", async () => {
+  const { updateErrorCode } = autoUpdateModule;
+  assert.equal(updateErrorCode(Object.assign(new Error("x"), { code: "ENOTFOUND" })), "enotfound");
+  const timeout = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  assert.equal(timeout.code, 23);
+  assert.equal(updateErrorCode(timeout), "timeouterror");
+  assert.equal(updateErrorCode("signature-invalid"), "signature-invalid");
+  assert.equal(updateErrorCode(null), null);
+});

@@ -367,6 +367,26 @@ test("a worker that lost the transaction lock is a deferral at both the local an
     stage: stageCandidate, run: async () => { throw new Error("recovery-worker-exit-1"); } });
   assert.equal(broken.ok, false); assert.equal(failures.length, 1); assert.equal(failures[0][1], "1.2.3"); assert.equal(failures[0][2].reason, "recovery-worker-exit-1");
 });
+test("a worker's own cause survives its exit code into status.json and the release's failure record", async t => {
+  const homeDir = fixture(t), root = path.join(homeDir, ".relay"), failures = [];
+  const crash = async () => {
+    // What src/recovery-entry.js leaves behind before it exits 1.
+    write(path.join(root, "recovery", "worker-failure.json"), { schema: 1, at: Date.now(), version: "1.2.3", message: "activate: exact-root-health-failed: no heartbeat" });
+    throw new Error("recovery-worker-exit-1");
+  };
+  const result = await recover({ homeDir, env: {}, now: () => 3000, policyFactory: countingPolicy(failures), memory: () => ({ pressured: false }), discoverImpl: async () => "1.2.3",
+    stage: stageCandidate, run: crash });
+  assert.equal(result.ok, false);
+  assert.equal(result.lastError, "recovery-worker-exit-1", "the launcher still classifies the exit");
+  assert.equal(result.lastErrorDetail, "activate: exact-root-health-failed: no heartbeat");
+  assert.equal(readJson(path.join(root, "recovery", "status.json")).lastErrorDetail, "activate: exact-root-health-failed: no heartbeat");
+  assert.equal(failures[0][2].reason, "activate: exact-root-health-failed: no heartbeat (recovery-worker-exit-1)");
+  // A cause older than this attempt belongs to another worker.
+  write(path.join(root, "recovery", "worker-failure.json"), { schema: 1, at: 1, message: "lock: stale: old" });
+  const stale = await recover({ homeDir, env: {}, now: () => 4000 + 60 * 60_000, policyFactory: countingPolicy(failures), memory: () => ({ pressured: false }), discoverImpl: async () => "1.2.3",
+    stage: stageCandidate, run: async () => { throw new Error("recovery-worker-exit-1"); } });
+  assert.equal(stale.lastErrorDetail, undefined);
+});
 test("a runtime committed moments ago is given a startup grace before any restart; two matching crashes end it early", async t => {
   const homeDir = fixture(t), root = path.join(homeDir, ".relay");
   const current = { active: true, version: "1.2.3", packageRoot: path.join(root, "runtime", "releases", "1.2.3", "node_modules", "relay-companion"), committedAt: 100_000 };
@@ -426,4 +446,17 @@ for (const [name, change] of [
     health: () => ({ ok: true, daemon: true, pill: true }), stage: () => assert.fail("healthy runtime must not be replaced"),
     verifyReady: async (options) => { seen.push(options.continuity); return { ok: true, heartbeatAt: at, identity: "x" }; } });
   assert.deepEqual(seen, [undefined]);
+});
+test("a repair never installs a version older than one this computer already ran healthily", async t => {
+  const homeDir = fixture(t);
+  // The old-key bridge record still says 0.1.550; this computer proved 0.1.634.
+  write(path.join(homeDir, ".relay", "recovery", "runtime-good.json"), { version: "1.0.5", channel: "stable", packageRoot: "/missing" });
+  let staged = null;
+  await recover({ homeDir, env: {}, now: () => 100, memory: () => ({ pressured: false }), discoverImpl: async () => "1.0.1",
+    stage: ({ version }) => { staged = version; throw Error("test-stop"); } });
+  assert.equal(staged, "1.0.5", "the newest proven version is the repair target, never an older one");
+  staged = null;
+  await recover({ homeDir, env: {}, now: () => 200, memory: () => ({ pressured: false }), discoverImpl: async () => "1.0.9",
+    stage: ({ version }) => { staged = version; throw Error("test-stop"); } });
+  assert.equal(staged, "1.0.9", "a newer release is still the target");
 });

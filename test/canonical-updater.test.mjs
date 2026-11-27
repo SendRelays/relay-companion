@@ -1016,3 +1016,29 @@ test("macOS activation waits for the label to leave the domain and retries a rac
   assert.ok(calls.some((c) => c.includes("print gui/")), "it waits on the domain rather than bootstrapping blind");
   assert.equal(calls.filter((c) => c.includes("bootstrap")).length, 3, "one retry for the pill, one clean bootstrap for the daemon");
 });
+
+test("a restored release counts as serving only when its daemon alone runs, beats and answers", async () => {
+  const { confirmRuntimeServing } = await import("../src/canonical-updater.js");
+  const target = { version: "0.1.634", packageRoot: "/h/.relay/runtime/releases/a/node_modules/relay-companion", bin: "/h/.relay/runtime/releases/a/node_modules/relay-companion/bin/relay.js" };
+  const healthy = { known: true, daemon: true, oldDaemon: false, pill: true, oldBroker: false };
+  const check = (overrides = {}) => confirmRuntimeServing(target, {
+    homeDir: "/h", sleep: async () => {}, now: () => 100_000,
+    health: () => healthy, readHeartbeat: () => ({ version: "0.1.634", pid: 9, at: 95_000 }),
+    hasProbe: () => true, probe: async () => ({ ok: true }), ...overrides,
+  });
+  assert.deepEqual(await check(), { ok: true, pill: true, oldBroker: false, oldPill: false });
+  // A stray broker or a missing pill is for the daemon's own guards to heal.
+  assert.equal((await check({ health: () => ({ ...healthy, pill: false, oldBroker: true }) })).ok, true);
+  assert.equal((await check({ health: () => ({ ...healthy, oldDaemon: true }) })).reason, "daemon-not-serving");
+  assert.equal((await check({ health: () => ({ ...healthy, daemon: false }) })).reason, "daemon-not-serving");
+  assert.equal((await check({ health: () => ({ known: false }) })).reason, "daemon-not-serving", "an observer that cannot list processes proves nothing");
+  assert.equal((await check({ readHeartbeat: () => ({ version: "0.1.634", at: 1_000 }) })).reason, "daemon-heartbeat-stale");
+  assert.equal((await check({ readHeartbeat: () => ({ version: "0.1.648", at: 95_000 }) })).reason, "daemon-heartbeat-stale");
+  assert.equal((await check({ readHeartbeat: () => { throw new Error("ENOENT"); } })).reason, "daemon-heartbeat-stale");
+  assert.equal((await check({ probe: async () => ({ ok: false, reason: "daemon-probe-timeout" }) })).reason, "daemon-probe-timeout");
+  assert.equal((await check({ hasProbe: () => false, probe: async () => assert.fail("old releases are not probed") })).ok, true);
+  // Both samples must hold: a daemon that dies between them is not serving.
+  let samples = 0;
+  assert.equal((await check({ health: () => (++samples === 1 ? healthy : { ...healthy, daemon: false }) })).ok, false);
+  assert.equal((await confirmRuntimeServing(null)).reason, "serving-target-invalid");
+});

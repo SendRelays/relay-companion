@@ -37,7 +37,7 @@ export async function startAcpRun({ provider, sessionId, cwd = process.cwd(), ti
   provider = acpProvider(provider);
   const key = sessionId ? `${provider}:${sessionId}` : randomUUID();
   if (opening.has(key) || (sessionId && !acpWorker(sessionId)?.closed && acpWorker(sessionId))) throw new Error("This native session already has a Relay ACP owner");
-  const release = updateActivity.beginCall({ configDir: configDir(), kind: "work" });
+  const release = updateActivity.beginCall({ configDir: configDir(), kind: "work", label: `acp-run:${String(provider || "unknown").slice(0, 40)}` });
   opening.add(key);
   const prior = sessionId && acpWorker(sessionId);
   let ownership;

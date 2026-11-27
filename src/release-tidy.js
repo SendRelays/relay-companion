@@ -31,7 +31,8 @@ export function runReleaseTidyOnce({ log = () => {}, spawnImpl = spawn, execPath
       clearTimeout(timer);
       let result = null;
       try { result = JSON.parse(output.trim().split(/\r?\n/).pop() || "null"); } catch {}
-      if (result?.removed?.length) log(`release tidy removed ${result.removed.length} unused release cop${result.removed.length === 1 ? "y" : "ies"}: ${result.removed.join(", ")}`);
+      if (result?.removed?.length) log(`release tidy removed ${result.removed.length} unused release cop${result.removed.length === 1 ? "y" : "ies"}${result.lowDisk ? " (low disk: one backup kept)" : ""}: ${result.removed.join(", ")}`);
+      if (result?.updateRequestsRemoved) log(`release tidy removed ${result.updateRequestsRemoved} old update records`);
       else if (result?.ok === false) log(`release tidy failed: ${result.skipped || "unknown"}${result.detail ? ` (${result.detail})` : ""}`);
       resolve(result);
     });

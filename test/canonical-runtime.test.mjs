@@ -594,6 +594,62 @@ posixFsTest("rollback failure preserves a non-authoritative recovery journal", a
   assert.equal(recovery.failure.phase, "rollback");
 });
 
+// 2026-11-26: a Mac's rollback to 0.1.634 failed its proof while 0.1.634's
+// daemon kept serving; recording "nothing active" sent it into recovery that
+// restarted Relay on every attempt.
+posixFsTest("a rollback that failed its proof but left the previous release serving keeps that release active", async () => {
+  const homeDir = fixture();
+  const previous = existingPointer(homeDir);
+  const checked = [];
+  const result = await runPosix({
+    homeDir,
+    postCommitActivate: async () => ({ ok: false, reason: "activation-not-ready" }),
+    rollbackActivate: async () => ({ ok: false, reason: "activation-not-ready", detail: "health:{oldBroker:true}" }),
+    confirmServing: async (target) => { checked.push(target.version); return { ok: true, pill: true, oldBroker: true }; },
+  });
+  assert.equal(result.ok, false, "the update still failed");
+  assert.equal(result.rolledBack, true);
+  assert.deepEqual(checked, [previous.version]);
+  const active = readCanonicalRuntime({ homeDir, platform: "linux" });
+  assert.equal(active.version, previous.version, "the serving release stays the active runtime");
+  assert.deepEqual({ reason: active.rollbackIncomplete.reason, failedVersion: active.rollbackIncomplete.failedVersion, strayBroker: active.rollbackIncomplete.strayBroker },
+    { reason: "activation-not-ready", failedVersion: result.candidate.version, strayBroker: true });
+  assert.equal(result.rollbackIncomplete.reason, "activation-not-ready");
+  assert.equal(fs.existsSync(result.candidate.packageRoot), true, "a process of the failed tree may still run; the tidy removes it later");
+});
+
+posixFsTest("a rollback that failed with nothing proven serving still leaves the journal for recovery", async () => {
+  const homeDir = fixture();
+  existingPointer(homeDir);
+  const result = await runPosix({
+    homeDir,
+    postCommitActivate: async () => ({ ok: false, reason: "activation-not-ready" }),
+    rollbackActivate: async () => ({ ok: false, reason: "activation-not-ready" }),
+    confirmServing: async () => ({ ok: false, reason: "daemon-not-serving" }),
+  });
+  assert.equal(result.rolledBack, false);
+  assert.equal(readCanonicalRuntimeState({ homeDir, platform: "linux" }).state, "recovery-required");
+});
+
+posixFsTest("recovery keeps a previous release that is serving although its re-activation failed", async () => {
+  const homeDir = fixture();
+  const previous = existingPointer(homeDir);
+  const layout = canonicalRuntimeLayout({ homeDir, platform: "linux" });
+  fs.writeFileSync(layout.pointerPath, JSON.stringify({ schema: 1, active: false, state: "recovery-required", previous,
+    candidate: { version: "0.1.648", releaseId: "0.1.648-x" }, failure: { phase: "rollback", reason: "activation-not-ready" } }));
+  const result = await recoverCanonicalRuntime({
+    homeDir, platform: "linux",
+    rollbackActivate: async () => ({ ok: false, reason: "activation-not-ready" }),
+    confirmServing: async () => ({ ok: true, pill: false }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.recovered, true);
+  const active = readCanonicalRuntime({ homeDir, platform: "linux" });
+  assert.equal(active.version, previous.version);
+  assert.equal(active.rollbackIncomplete.failedVersion, "0.1.648");
+  assert.equal(active.rollbackIncomplete.pill, false);
+});
+
 for (const crashPoint of ["after-journal", "after-repair-runtime", "after-service-restart"]) {
   posixFsTest(`startup recovery restores previous runtime after crash ${crashPoint}`, async () => {
     const homeDir = fixture();

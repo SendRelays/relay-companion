@@ -2353,7 +2353,7 @@ export async function handleCall(client, name, args, options = {}) {
   // Waiting for a tap in the pill holds no work an update could interrupt, so
   // it never keeps an update waiting; it also returns as soon as one starts.
   if (name === "relay_onboarding_wait_pick") return handleAdmittedCall(client, name, args, options);
-  const release = require("../bootstrap/update-activity.cjs").beginCall();
+  const release = require("../bootstrap/update-activity.cjs").beginCall({ label: String(name || "").slice(0, 80) });
   try {
     const run = () => handleAdmittedCall(client, name, args, options);
     return await (CHAT_READ_TOOLS.has(name) ? withReadContext(name, run, { signal: options.signal }) : run());

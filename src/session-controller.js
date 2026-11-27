@@ -1050,7 +1050,7 @@ export async function runSessionDirectoryOnce({
     try {
       // Admission precedes claiming server work so an update never strands a
       // claimed operation between the claim and starting its local worker.
-      releaseUpdateWork = updateActivity.beginCall({ configDir: configDir(), kind: "work" });
+      releaseUpdateWork = updateActivity.beginCall({ configDir: configDir(), kind: "work", label: `session-operation:${String(operation.kind || "unknown").slice(0, 40)}` });
       const claim = await client.claimSessionOperation(operation.id);
       if (claim.terminal) { releaseUpdateWork(); return; }
       activeOperations.add(operation.id);

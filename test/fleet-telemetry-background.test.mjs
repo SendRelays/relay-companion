@@ -148,11 +148,40 @@ test("a slow real subprocess leaves timers responsive and collection preserves r
     query: fixtureQuery("setTimeout(() => process.stdout.write(''), 300)"),
   });
   assert.ok(ticks >= 5, `timer continued during process scan (${ticks} ticks)`);
-  const report = JSON.parse(Buffer.from(result, "base64url"));
+  const report = JSON.parse(Buffer.from(result.header, "base64url"));
   assert.equal(report.schema, 1);
   assert.equal(report.runtimeState, "legacy");
   assert.equal(report.installation.os, process.platform);
   assert.equal(JSON.stringify(report).includes(context.homeDir), false);
+  // The whole report travels beside the compact header, unshed.
+  const full = JSON.parse(result.full);
+  assert.equal(full.schema, 1);
+  assert.equal(full.installation.os, process.platform);
+  assert.equal(result.full.includes(context.homeDir), false);
+});
+
+test("the cache keeps the whole report beside the header and lets a body upload accept an older sample", async () => {
+  let clock = 1_000;
+  const runs = [];
+  const cache = createFleetTelemetryCache({
+    context: () => ({ key: "k" }), now: () => clock,
+    collect: () => new Promise(resolve => runs.push(resolve)),
+  });
+  assert.equal(cache.header(), "");
+  assert.equal(cache.full(), null);
+  await delay(0);
+  runs[0]({ header: "aGVhZGVy", full: '{"schema":1}' });
+  await delay(0);
+  assert.equal(cache.header(), "aGVhZGVy");
+  assert.deepEqual(cache.full(), { report: '{"schema":1}', at: 1_000 });
+  clock += 60_000;
+  assert.equal(cache.full(), null, "a header-fresh sample has expired");
+  await delay(0);
+  runs[1]({ header: "", full: '{"schema":1,"big":true}' });
+  await delay(0);
+  assert.equal(cache.header(), "", "a report too large for the header still caches its whole form");
+  clock += 60_000;
+  assert.deepEqual(cache.full("", { freshMs: 120_000 }), { report: '{"schema":1,"big":true}', at: 61_000 });
 });
 
 test("cancelling a hung scan reaps its subprocess before settling", async t => {
@@ -254,4 +283,36 @@ test("device requests send immediately without telemetry and preserve auth and p
   assert.equal(received[0].headers.authorization, "Bearer dev_test_only");
   assert.equal(received[0].headers["x-relay-companion-telemetry"], undefined, "cold telemetry is optional and not awaited");
   assert.equal(received[0].body, "");
+});
+
+test("the daemon sends the whole report when it changes, at most once a minute, and every five minutes regardless", async () => {
+  const { startFleetReportUpload, FLEET_REPORT_UNSUPPORTED_HOLD_MS } = await import("../src/task-daemon.js");
+  let clock = 0, report = '{"schema":1,"a":1}', fail = null;
+  const sent = [];
+  const client = {
+    fleetReport: () => (report ? { report, at: clock } : null),
+    uploadFleetReport: async (body) => { if (fail) throw Object.assign(new Error("x"), { status: fail }); sent.push(body); },
+  };
+  const upload = startFleetReportUpload({ makeClient: () => client, now: () => clock, setIntervalImpl: () => null });
+  assert.equal((await upload.check()).status, "sent");
+  clock = 30_000; report = '{"schema":1,"a":2}';
+  assert.equal((await upload.check()).status, "unchanged", "not twice within a minute");
+  clock = 61_000;
+  assert.equal((await upload.check()).status, "sent", "a changed report goes after a minute");
+  clock = 200_000;
+  assert.equal((await upload.check()).status, "unchanged");
+  clock = 361_000;
+  assert.equal((await upload.check()).status, "sent", "an unchanged report is refreshed every five minutes");
+  assert.deepEqual(sent, ['{"schema":1,"a":1}', '{"schema":1,"a":2}', '{"schema":1,"a":2}']);
+
+  // An API that predates the route: hold for an hour, then try again.
+  clock = 800_000; fail = 404;
+  assert.deepEqual(await upload.check(), { status: "failed", code: 404 });
+  clock += FLEET_REPORT_UNSUPPORTED_HOLD_MS - 1;
+  assert.equal((await upload.check()).status, "held");
+  clock += 1; fail = null;
+  assert.equal((await upload.check()).status, "sent");
+  report = "";
+  clock += 600_000;
+  assert.equal((await upload.check()).status, "no-sample");
 });

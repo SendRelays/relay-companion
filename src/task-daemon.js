@@ -976,6 +976,52 @@ export function startMcpBrokerDescriptorGuard({
 // daemon restarts on every sign-out and sign-in, so it finishes those here:
 // once at start, then on a slow cadence for as long as any remain.
 export const PENDING_SIGN_OUT_INTERVAL_MS = 10 * 60_000;
+// The whole fleet report goes in its own request body (POST /v1/devices/telemetry)
+// so the reasons this computer is failing are never shed to fit the 4096-byte
+// header. Sent when it changed (at most once a minute) and every five minutes
+// regardless, so the fleet never mistakes a quiet computer for a stale report.
+export const FLEET_REPORT_POLL_MS = 15_000;
+export const FLEET_REPORT_MIN_GAP_MS = 60_000;
+export const FLEET_REPORT_REFRESH_MS = 5 * 60_000;
+// An API without the route (one released before it) answers 404.
+export const FLEET_REPORT_UNSUPPORTED_HOLD_MS = 60 * 60_000;
+
+export function startFleetReportUpload({
+  makeClient = () => new RelayClient(),
+  pollMs = FLEET_REPORT_POLL_MS,
+  now = Date.now,
+  setIntervalImpl = setInterval,
+} = {}) {
+  let last = "";
+  let lastAt = 0;
+  let holdUntil = 0;
+  let running = false;
+  const check = async () => {
+    if (running || now() < holdUntil) return { status: "held" };
+    running = true;
+    try {
+      const client = makeClient();
+      const sample = client.fleetReport({ freshMs: 2 * 60_000 });
+      if (!sample) return { status: "no-sample" };
+      const gap = last ? now() - lastAt : Infinity;
+      if (gap >= 0 && (gap < FLEET_REPORT_MIN_GAP_MS || (sample.report === last && gap < FLEET_REPORT_REFRESH_MS))) return { status: "unchanged" };
+      await client.uploadFleetReport(sample.report);
+      last = sample.report;
+      lastAt = now();
+      return { status: "sent" };
+    } catch (error) {
+      const code = Number(error?.status ?? error?.statusCode) || null;
+      holdUntil = now() + (code === 404 ? FLEET_REPORT_UNSUPPORTED_HOLD_MS : FLEET_REPORT_MIN_GAP_MS);
+      return { status: "failed", code };
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setIntervalImpl(() => void check(), pollMs);
+  if (timer && typeof timer.unref === "function") timer.unref();
+  return { stop: () => clearInterval(timer), check };
+}
+
 export function startPendingSignOutFlush({
   log = () => {},
   flush = flushPendingSignOuts,
@@ -1059,6 +1105,7 @@ async function runTaskDaemonImpl({ intervalMs = 4000, health } = {}) {
   startPillSupervisor({ log });
   startMcpBrokerDescriptorGuard({ log, packageRoot: companionPackageRoot() });
   startPendingSignOutFlush({ log });
+  startFleetReportUpload();
   const autoUpdater = createAutoUpdater({
     log,
     // A sign-in in progress is work too: an update restart closes the panel

@@ -1,6 +1,7 @@
 // Executed from a signature-verified download or a validated, previously
 // installed release. Normal updates and recovery share the canonical lock.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCanonicalUpdateTransaction } from "./canonical-updater.js";
@@ -35,6 +36,31 @@ export const EXIT_TRANSACTION_IN_PROGRESS = 75;
 export function recoveryExitCode(error) {
   return error?.transactionInProgress === true ? EXIT_TRANSACTION_IN_PROGRESS : 1;
 }
+// The runner only sees this worker's exit code (recovery-worker-exit-1), so the
+// worker leaves its real cause beside the runner's status for the runner to
+// keep (lastErrorDetail) and the fleet report to carry (fleet-problems.js).
+// A worker that only lost the lock judged nothing and leaves nothing.
+export function workerFailurePath(homeDir = os.homedir()) {
+  return path.join(homeDir, ".relay", "recovery", "worker-failure.json");
+}
+export function recordWorkerFailure(error, { version, homeDir = os.homedir(), now = Date.now } = {}) {
+  try {
+    const file = workerFailurePath(homeDir);
+    if (error?.transactionInProgress === true) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify({ schema: 1, at: now(), version: version || null,
+      attemptId: process.env.RELAY_RECOVERY_ATTEMPT_ID || null, message: String(error?.message || error).slice(0, 600) }));
+    fs.renameSync(temporary, file);
+  } catch {}
+}
+export function clearWorkerFailure({ homeDir = os.homedir() } = {}) {
+  try { fs.rmSync(workerFailurePath(homeDir), { force: true }); } catch {}
+}
 if (process.env.RELAY_RECOVERY_WORKER === "1") {
-  runRecovery(process.argv[2], process.argv[3]).catch((error) => { console.error(error.message); process.exitCode = recoveryExitCode(error); });
+  runRecovery(process.argv[2], process.argv[3]).then(() => clearWorkerFailure(), (error) => {
+    console.error(error.message);
+    recordWorkerFailure(error, { version: process.argv[2] });
+    process.exitCode = recoveryExitCode(error);
+  });
 }

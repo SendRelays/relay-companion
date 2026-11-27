@@ -35,21 +35,65 @@ async function serverFor(t, handler) {
   return new RelayClient({ url: `http://127.0.0.1:${server.address().port}`, token: "test-private-token" });
 }
 
+// The read's wall clock and its timeout timers belong to the test, so a loaded
+// machine cannot decide whether a socket failure or the budget's expiry is
+// seen first. Each AbortSignal.timeout(ms) is recorded and fires only on expire().
+function controlledClock(t) {
+  let now = Date.now();
+  const timers = [];
+  t.mock.method(Date, "now", () => now);
+  t.mock.method(AbortSignal, "timeout", (ms) => {
+    const controller = new AbortController();
+    timers.push({ ms, controller });
+    return controller.signal;
+  });
+  return {
+    timers,
+    advance(ms) { now += ms; },
+    expire(timer) { timer.controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")); },
+  };
+}
+
 test("a retry uses the original budget and returns an actionable timeout", async (t) => {
   let attempts = 0;
   const records = [];
+  let clock;
   const client = await serverFor(t, (req, res) => {
     if (req.url === "/v1/me") { res.end("{}"); return; }
     attempts++;
-    if (attempts === 1) setTimeout(() => req.socket.destroy(), 70);
+    // 150 ms of the 220 ms budget pass before the first connection breaks.
+    if (attempts === 1) { clock.advance(150); req.socket.destroy(); return; }
+    // The retry is held unanswered until its budget, not a fresh 15 s, runs out.
+    clock.expire(clock.timers[0]);
   });
-  await client.me(); // Load the transport before measuring the retry budget.
-  const start = performance.now();
+  await client.me(); // Load the transport before taking control of the clock.
+  clock = controlledClock(t);
   await assert.rejects(withReadContext("relay_chat_fetch", () => client.chat("chat_test", { limit: 25 }), { budgetMs: 220, record: (r) => records.push(r) }), { code: "relay_timeout", retryable: true });
   assert.equal(attempts, 2);
-  assert.ok(performance.now() - start < 1000, "retry must not restart a 15-second timeout");
+  assert.deepEqual(clock.timers.map((timer) => timer.ms), [220, 220, 70], "the retry gets the 70 ms left of the budget, never a restarted 15-second timeout");
   assert.equal(records.find((r) => r.phase === "tool").outcome, "timeout");
   assert.equal(new Set(records.map((r) => r.requestId)).size, 1);
+});
+
+test("a connection failure seen after the budget ran out is still an actionable timeout", async (t) => {
+  // On a starved machine the reset socket can be read after the deadline has
+  // passed but before the budget's timer has fired. No retry fits; the caller
+  // must still learn that the read timed out, not a bare "fetch failed".
+  let attempts = 0;
+  const records = [];
+  let clock;
+  const client = await serverFor(t, (req, res) => {
+    if (req.url === "/v1/me") { res.end("{}"); return; }
+    attempts++;
+    clock.advance(250);
+    req.socket.destroy();
+  });
+  await client.me();
+  clock = controlledClock(t);
+  await assert.rejects(withReadContext("relay_chat_fetch", () => client.chat("chat_test", { limit: 25 }), { budgetMs: 220, record: (r) => records.push(r) }), { code: "relay_timeout", retryable: true });
+  assert.equal(attempts, 1, "no retry starts once the budget is spent");
+  assert.equal(clock.timers[0].controller.signal.aborted, false, "the budget timer had not fired");
+  assert.equal(records.find((r) => r.phase === "tool").outcome, "timeout");
 });
 
 test("caller cancellation aborts the request without retrying", async (t) => {

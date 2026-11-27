@@ -564,7 +564,8 @@ async function launch({ root = __dirname, run = runChild, now = Date.now, env = 
       const lostTransaction = /recovery-worker-exit-75|transaction-in-progress/i.test(report?.lastError || "");
       const retryableReport = ["disabled", "backoff", "emergency-backoff", "restart-failed", "pill-repair-failed", "observation-unavailable", "reactivate-failed", "service-repair-failed", "service-repair-unhealthy"].includes(report?.status) || (report?.status === "failed" && (networkFailure || lostTransaction));
       if (reported && retryableReport && result.reason !== "deadline") {
-        write(path.join(root, "launcher-status.json"), { schema: 1, at: now(), status: "runner-error", version: candidate.version });
+        // Which runner status sent it back, for the fleet report (fleet-problems.js).
+        write(path.join(root, "launcher-status.json"), { schema: 1, at: now(), status: "runner-error", runtimeStatus: report.status, version: candidate.version });
         log("done status=runner-error");
         return { ok: false, status: "runner-error" };
       }
